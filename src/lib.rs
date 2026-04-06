@@ -220,6 +220,20 @@ impl Emulator {
         // Check if framebuffer has any visible content
         let fb_nonblack = ppu.frame_buffer.iter().filter(|&&p| p != 0xFF000000).count();
 
+        // APU state
+        let apu = &self.bus.apu;
+        let spc_pc = apu.cpu.pc;
+        let spc_halted = apu.cpu.halted;
+        let ports_to = &apu.bus.ports_to_main;
+        let ports_from = &apu.bus.ports_from_main;
+        let spc_cycles = apu.cycles;
+        let sample_buf_len = apu.sample_buffer.len();
+        // Count active DSP voices (env_phase != Off)
+        let active_voices = (0..8u8).filter(|&i| {
+            // Check KON register and if voice has been keyed
+            apu.bus.dsp.regs[0x4C] & (1 << i) != 0 || apu.bus.dsp.regs[0x7C] & (1 << i) != 0
+        }).count();
+
         format!(
             "PPU: mode={} blank={} bright={} TM={:02X} OBSEL_size={} | \
              BG1: map={:04X} chr={:04X} scr=({},{}) | \
@@ -227,7 +241,9 @@ impl Emulator {
              Sprites: {} active{} | \
              Game: mode=${:02X} sub=${:02X} link=({},{}) | \
              OBJ base={:04X} namesel={:04X} | \
-             FB: {} visible px | PC={:02X}:{:04X}",
+             FB: {} visible px | PC={:02X}:{:04X} | \
+             APU: spc_pc={:04X} halted={} cycles={} samples={} voices={} \
+             ports_out=[{:02X},{:02X},{:02X},{:02X}] ports_in=[{:02X},{:02X},{:02X},{:02X}]",
             mode, forced_blank, brightness, tm, ppu.obj_size,
             ppu.bg[0].tilemap_addr, ppu.bg[0].chr_addr,
             ppu.bg[0].hscroll & 0x3FF, ppu.bg[0].vscroll & 0x3FF,
@@ -237,6 +253,9 @@ impl Emulator {
             ppu.obj_base, ppu.obj_name_select,
             fb_nonblack,
             self.cpu.pbr, self.cpu.pc,
+            spc_pc, spc_halted, spc_cycles, sample_buf_len, active_voices,
+            ports_to[0], ports_to[1], ports_to[2], ports_to[3],
+            ports_from[0], ports_from[1], ports_from[2], ports_from[3],
         )
     }
 

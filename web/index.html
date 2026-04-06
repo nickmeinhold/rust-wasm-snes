@@ -189,13 +189,16 @@
             canvas.focus();
 
             // ── Web Audio setup ─────────────────────────────────
-            // Audio requires a user gesture to start. We create the
-            // AudioContext on first interaction, then start playing.
+            // Efficient ring buffer: fixed-size Float32Array with read/write cursors.
+            // Avoids Array.shift() which is O(n) and freezes on large buffers.
+            const RING_SIZE = 65536; // Must be power of 2
+            const ringL = new Float32Array(RING_SIZE);
+            const ringR = new Float32Array(RING_SIZE);
+            let ringWrite = 0;
+            let ringRead = 0;
+
             let audioCtx = null;
             let audioStarted = false;
-            // Ring buffer: accumulate samples from WASM, drain in ScriptProcessor.
-            const audioRingBuffer = [];
-            const AUDIO_BUFFER_TARGET = 2048; // samples (stereo pairs) to buffer
 
             function initAudio() {
                 if (audioStarted) return;
@@ -204,18 +207,15 @@
                     audioCtx = new (window.AudioContext || window.webkitAudioContext)({
                         sampleRate: 32000
                     });
-                    // ScriptProcessorNode: simple and widely supported.
-                    // bufferSize=2048 → ~64ms latency at 32kHz.
-                    const processor = audioCtx.createScriptProcessor(2048, 0, 2);
+                    const processor = audioCtx.createScriptProcessor(1024, 0, 2);
                     processor.onaudioprocess = (e) => {
                         const left = e.outputBuffer.getChannelData(0);
                         const right = e.outputBuffer.getChannelData(1);
-                        const needed = left.length;
-
-                        for (let i = 0; i < needed; i++) {
-                            if (audioRingBuffer.length >= 2) {
-                                left[i] = audioRingBuffer.shift() / 32768;
-                                right[i] = audioRingBuffer.shift() / 32768;
+                        for (let i = 0; i < left.length; i++) {
+                            if (ringRead !== ringWrite) {
+                                left[i] = ringL[ringRead & (RING_SIZE - 1)];
+                                right[i] = ringR[ringRead & (RING_SIZE - 1)];
+                                ringRead++;
                             } else {
                                 left[i] = 0;
                                 right[i] = 0;
@@ -223,13 +223,13 @@
                         }
                     };
                     processor.connect(audioCtx.destination);
-                    console.log('Audio initialized: 32kHz stereo via ScriptProcessor');
+                    console.log('Audio initialized: 32kHz stereo');
                 } catch (err) {
                     console.warn('Audio init failed:', err);
                 }
             }
 
-            // Start audio on first user interaction (browser policy).
+            // Start audio on first user interaction (browser autoplay policy).
             const startAudioOnGesture = () => {
                 initAudio();
                 document.removeEventListener('keydown', startAudioOnGesture);
@@ -254,14 +254,18 @@
                     const imageData = new ImageData(new Uint8ClampedArray(rgba), 256, 224);
                     ctx.putImageData(imageData, 0, 0);
 
-                    // Drain audio samples from the APU and push to ring buffer.
-                    if (audioStarted) {
-                        const samples = emulator.get_audio_samples();
-                        // Prevent buffer from growing unbounded.
-                        if (audioRingBuffer.length < AUDIO_BUFFER_TARGET * 4) {
-                            for (let i = 0; i < samples.length; i++) {
-                                audioRingBuffer.push(samples[i]);
-                            }
+                    // Always drain audio samples to prevent Rust-side accumulation.
+                    const samples = emulator.get_audio_samples();
+                    if (audioStarted && samples.length >= 2) {
+                        // Write interleaved i16 stereo samples to ring buffer.
+                        const available = (ringWrite - ringRead) >>> 0;
+                        const maxWrite = RING_SIZE - available - 1; // Leave 1 slot gap
+                        const stereoSamples = Math.min(samples.length >> 1, maxWrite);
+                        for (let i = 0; i < stereoSamples; i++) {
+                            const idx = ringWrite & (RING_SIZE - 1);
+                            ringL[idx] = samples[i * 2] / 32768;
+                            ringR[idx] = samples[i * 2 + 1] / 32768;
+                            ringWrite++;
                         }
                     }
 

@@ -143,34 +143,36 @@ impl Apu {
 
     /// Run the APU for the given number of SPC700 cycles.
     pub fn run_cycles(&mut self, target_cycles: u32) {
-        for _ in 0..target_cycles {
-            // Execute one SPC700 instruction.
-            if !self.cpu.halted {
-                self.cpu.step(&mut self.bus);
-            }
+        let end_cycle = self.cycles + target_cycles as u64;
+        while self.cycles < end_cycle {
+            // Execute one SPC700 instruction (each takes multiple cycles).
+            let inst_cycles = if !self.cpu.halted {
+                self.cpu.step(&mut self.bus) as u64
+            } else {
+                1 // Advance time even when halted
+            };
 
-            // Tick timers at their native rates.
-            // T0, T1: 8 kHz = every 128 SPC cycles.
-            // T2: 64 kHz = every 16 SPC cycles.
-            let c = self.cycles;
-            if c % 128 == 0 {
-                self.bus.timers[0].tick();
-                self.bus.timers[1].tick();
-            }
-            if c % 16 == 0 {
-                self.bus.timers[2].tick();
-            }
+            // Tick timers and DSP for each cycle consumed by this instruction.
+            for _ in 0..inst_cycles {
+                let c = self.cycles;
+                if c % 128 == 0 {
+                    self.bus.timers[0].tick();
+                    self.bus.timers[1].tick();
+                }
+                if c % 16 == 0 {
+                    self.bus.timers[2].tick();
+                }
 
-            // DSP generates one stereo sample every 32 SPC cycles (32 kHz).
-            self.dsp_counter += 1;
-            if self.dsp_counter >= 32 {
-                self.dsp_counter = 0;
-                let (left, right) = self.bus.dsp.generate_sample(&self.bus.ram);
-                self.sample_buffer.push(left);
-                self.sample_buffer.push(right);
-            }
+                self.dsp_counter += 1;
+                if self.dsp_counter >= 32 {
+                    self.dsp_counter = 0;
+                    let (left, right) = self.bus.dsp.generate_sample(&self.bus.ram);
+                    self.sample_buffer.push(left);
+                    self.sample_buffer.push(right);
+                }
 
-            self.cycles += 1;
+                self.cycles += 1;
+            }
         }
     }
 
