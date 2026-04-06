@@ -233,15 +233,25 @@
             });
         }
 
-        function loadArchiveRom(filename) {
+        const CORS_PROXY = 'https://snes-cors-proxy.nick-meinhold.workers.dev/?url=';
+
+        async function loadArchiveRom(filename) {
             const url = ARCHIVE_DL + encodeURIComponent(filename);
-            // Open download in new tab — archive.org will serve the file.
-            window.open(url, '_blank');
-            // Highlight the drop zone and show instructions.
-            dropZone.classList.add('dragover');
-            status.innerHTML = `Downloading <strong>${filename}</strong> — once saved, drag the file onto the box above.`;
-            // Remove highlight after a few seconds.
-            setTimeout(() => dropZone.classList.remove('dragover'), 5000);
+            status.textContent = `Downloading ${filename}...`;
+            try {
+                const resp = await fetch(CORS_PROXY + encodeURIComponent(url));
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const data = new Uint8Array(await resp.arrayBuffer());
+                if (data.length < 1024) throw new Error('Response too small');
+                status.textContent = `Loaded ${filename} (${Math.round(data.length/1024)} KB)`;
+                await startEmulator(data);
+            } catch (err) {
+                console.warn('Proxy fetch failed:', err);
+                window.open(url, '_blank');
+                dropZone.classList.add('dragover');
+                status.innerHTML = `Download started — drag the file onto the box above.`;
+                setTimeout(() => dropZone.classList.remove('dragover'), 5000);
+            }
         }
 
         // ── Emulator lifecycle ────────────────────────────────
