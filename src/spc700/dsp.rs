@@ -1,86 +1,114 @@
-/// S-DSP (Sound Digital Signal Processor) emulation.
+/// S-DSP emulation — based on blargg's snes_spc reference implementation.
 ///
-/// The DSP is a peripheral of the SPC700, accessed via registers $F2/$F3.
-/// It has 128 registers controlling 8 voices, echo, noise, and mixing.
-/// Each voice plays BRR-compressed samples with pitch control and ADSR/GAIN
-/// envelopes. Output is stereo 16-bit at 32 kHz.
+/// The DSP generates stereo audio at 32 kHz using 8 voices, each playing
+/// BRR-compressed samples with pitch control and ADSR/GAIN envelopes.
+/// Features 4-point Gaussian interpolation, 8-tap FIR echo filter.
 
-/// DSP register addresses (per-voice: add voice*0x10).
-const V_VOL_L: u8 = 0x00;
-const V_VOL_R: u8 = 0x01;
-const V_PITCH_L: u8 = 0x02;
-const V_PITCH_H: u8 = 0x03;
-const V_SRCN: u8 = 0x04;
-const V_ADSR1: u8 = 0x05;
-const V_ADSR2: u8 = 0x06;
-const V_GAIN: u8 = 0x07;
-const V_ENVX: u8 = 0x08;
-const V_OUTX: u8 = 0x09;
+// ─── Gaussian interpolation table (512 entries) ─────────────────────
+// Left half of the Gaussian bell curve. The DSP indexes this with a
+// forward and reverse pointer to get 4 interpolation coefficients.
+#[rustfmt::skip]
+const GAUSS: [i16; 512] = [
+       0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+       1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   2,   2,   2,   2,   2,
+       2,   2,   3,   3,   3,   3,   3,   4,   4,   4,   4,   4,   5,   5,   5,   5,
+       6,   6,   6,   6,   7,   7,   7,   8,   8,   8,   9,   9,   9,  10,  10,  10,
+      11,  11,  11,  12,  12,  13,  13,  14,  14,  15,  15,  15,  16,  16,  17,  17,
+      18,  19,  19,  20,  20,  21,  21,  22,  23,  23,  24,  24,  25,  26,  27,  27,
+      28,  29,  29,  30,  31,  32,  32,  33,  34,  35,  36,  36,  37,  38,  39,  40,
+      41,  42,  43,  44,  45,  46,  47,  48,  50,  51,  53,  54,  56,  57,  59,  60,
+      61,  63,  64,  66,  68,  70,  71,  73,  75,  76,  78,  80,  82,  84,  86,  89,
+      91,  93,  96,  98, 100, 102, 104, 106, 109, 111, 113, 115, 118, 120, 122, 124,
+     126, 128, 130, 132, 134, 137, 139, 141, 143, 145, 147, 150, 152, 154, 156, 159,
+     161, 163, 166, 168, 171, 173, 175, 178, 180, 183, 186, 188, 191, 193, 196, 199,
+     201, 204, 207, 210, 212, 215, 218, 221, 224, 227, 230, 233, 236, 239, 242, 245,
+     248, 251, 254, 257, 260, 263, 267, 270, 273, 276, 280, 283, 286, 290, 293, 297,
+     300, 304, 307, 311, 314, 318, 321, 325, 328, 332, 336, 339, 343, 347, 351, 354,
+     358, 362, 366, 370, 374, 378, 381, 385, 389, 393, 397, 401, 405, 410, 414, 418,
+     422, 426, 430, 434, 439, 443, 447, 451, 456, 460, 464, 469, 473, 477, 482, 486,
+     491, 495, 499, 504, 508, 513, 517, 522, 527, 531, 536, 540, 545, 550, 554, 559,
+     563, 568, 573, 577, 582, 587, 592, 596, 601, 606, 611, 615, 620, 625, 630, 635,
+     640, 644, 649, 654, 659, 664, 669, 674, 678, 683, 688, 693, 698, 703, 708, 713,
+     718, 723, 728, 732, 737, 742, 747, 752, 757, 762, 767, 772, 777, 782, 787, 792,
+     797, 802, 806, 811, 816, 821, 826, 831, 836, 841, 846, 851, 855, 860, 865, 870,
+     875, 880, 884, 889, 894, 899, 904, 908, 913, 918, 923, 927, 932, 937, 941, 946,
+     951, 955, 960, 965, 969, 974, 978, 983, 988, 992, 997,1001,1005,1010,1014,1019,
+    1023,1027,1032,1036,1040,1045,1049,1053,1057,1061,1066,1070,1074,1078,1082,1086,
+    1090,1094,1098,1102,1106,1109,1113,1117,1121,1125,1128,1132,1136,1139,1143,1146,
+    1150,1153,1157,1160,1164,1167,1170,1174,1177,1180,1183,1186,1190,1193,1196,1199,
+    1202,1205,1207,1210,1213,1216,1219,1221,1224,1227,1229,1232,1234,1237,1239,1241,
+    1244,1246,1248,1251,1253,1255,1257,1259,1261,1263,1265,1267,1269,1270,1272,1274,
+    1275,1277,1279,1280,1282,1283,1284,1286,1287,1288,1290,1291,1292,1293,1294,1295,
+    1296,1297,1297,1298,1299,1300,1300,1301,1302,1302,1303,1303,1303,1304,1304,1304,
+    1304,1304,1305,1305,1305,1305,1305,1305,1305,1305,1305,1305,1305,1305,1305,1305,
+];
 
-/// Global DSP registers.
-const MVOL_L: u8 = 0x0C;
-const MVOL_R: u8 = 0x1C;
-const EVOL_L: u8 = 0x2C;
-const EVOL_R: u8 = 0x3C;
-const KON: u8 = 0x4C;
-const KOFF: u8 = 0x5C;
-const FLG: u8 = 0x6C;
-const ENDX: u8 = 0x7C;
-const EFB: u8 = 0x0D;
-const NON: u8 = 0x3D;
-const EON: u8 = 0x4D;
-const DIR: u8 = 0x5D;
-const ESA: u8 = 0x6D;
-const EDL: u8 = 0x7D;
-const FIR_BASE: u8 = 0x0F; // FIR coefficients at $xF (x=0..7)
-
-/// ADSR envelope rates (in DSP ticks). Index by rate value 0-31.
-/// Rate 0 = infinity (never advance). Higher values = faster rates.
-const RATE_TABLE: [u16; 32] = [
-    0, 2048, 1536, 1280, 1024, 768, 640, 512,
+// ─── Envelope rate periods (global counter system from blargg) ──────
+const COUNTER_RATES: [u16; 32] = [
+    30721, 2048, 1536, 1280, 1024, 768, 640, 512,
     384, 320, 256, 192, 160, 128, 96, 80,
     64, 48, 40, 32, 24, 20, 16, 12,
     10, 8, 6, 5, 4, 3, 2, 1,
 ];
 
+const COUNTER_OFFSETS: [u16; 32] = [
+    1, 0, 1040, 536, 0, 1040, 536, 0,
+    1040, 536, 0, 1040, 536, 0, 1040, 536,
+    0, 1040, 536, 0, 1040, 536, 0, 1040,
+    536, 0, 1040, 536, 0, 1040, 0, 0,
+];
+
+/// DSP register addresses.
+const KON: u8 = 0x4C;
+const KOFF: u8 = 0x5C;
+const FLG: u8 = 0x6C;
+const ENDX: u8 = 0x7C;
+const MVOL_L: u8 = 0x0C;
+const MVOL_R: u8 = 0x1C;
+const EVOL_L: u8 = 0x2C;
+const EVOL_R: u8 = 0x3C;
+const EFB: u8 = 0x0D;
+const EON: u8 = 0x4D;
+const DIR: u8 = 0x5D;
+const ESA: u8 = 0x6D;
+const EDL: u8 = 0x7D;
+const FIR_BASE: u8 = 0x0F;
+
+/// Clamp to signed 16-bit range (blargg's CLAMP16 macro).
+fn clamp16(v: i32) -> i32 {
+    if v as i16 as i32 != v {
+        (v >> 31) ^ 0x7FFF
+    } else {
+        v
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 enum EnvPhase { Attack, Decay, Sustain, Release, Off }
 
+/// Per-voice state.
 #[derive(Clone)]
 struct Voice {
-    /// Volume (signed 8-bit, applied per-channel).
     vol_l: i8,
     vol_r: i8,
-    /// 14-bit pitch (frequency control).
     pitch: u16,
-    /// Source number (indexes the sample directory).
     srcn: u8,
-    /// ADSR1/ADSR2 register values.
     adsr1: u8,
     adsr2: u8,
-    /// GAIN register value.
     gain: u8,
 
-    /// Current envelope level (0-0x7FF, 11-bit).
     env_level: i32,
-    /// Envelope phase.
+    hidden_env: i32,
     env_phase: EnvPhase,
-    /// Envelope tick counter (counts down from rate).
-    env_counter: u16,
 
-    /// BRR decoding state.
-    brr_addr: u16,       // Current BRR block address in APU RAM
-    brr_offset: u8,      // Sample index within current block (0-15)
-    brr_buffer: [i16; 16], // Decoded samples for current block
-    brr_old: [i16; 2],   // Previous two samples for BRR filter
+    /// BRR decode ring buffer (12 entries, wrapping).
+    brr_buf: [i32; 12],
+    brr_buf_pos: usize,
+    brr_addr: u16,
+    brr_header: u8,
 
-    /// Pitch counter (fractional sample position, 12-bit fraction).
-    pitch_counter: u16,
-
-    /// Whether the voice is keyed on.
-    key_on: bool,
-    /// Set when BRR end flag is encountered.
-    end_flag: bool,
+    /// Pitch interpolation position (bits 15-12: sample index, 11-0: fraction).
+    interp_pos: i32,
 }
 
 impl Default for Voice {
@@ -88,30 +116,25 @@ impl Default for Voice {
         Self {
             vol_l: 0, vol_r: 0, pitch: 0, srcn: 0,
             adsr1: 0, adsr2: 0, gain: 0,
-            env_level: 0, env_phase: EnvPhase::Off, env_counter: 0,
-            brr_addr: 0, brr_offset: 0, brr_buffer: [0; 16], brr_old: [0; 2],
-            pitch_counter: 0, key_on: false, end_flag: false,
+            env_level: 0, hidden_env: 0, env_phase: EnvPhase::Off,
+            brr_buf: [0; 12], brr_buf_pos: 0, brr_addr: 0, brr_header: 0,
+            interp_pos: 0,
         }
     }
 }
 
 pub struct Dsp {
-    /// Raw register file (128 bytes).
     pub regs: [u8; 128],
-    /// DSP address latch ($F2).
     pub addr_reg: u8,
-    /// 8 voices.
     voices: [Voice; 8],
-    /// Echo buffer position.
+    global_counter: u32,
     echo_pos: u16,
-    /// Echo buffer length in bytes.
     echo_length: u16,
-    /// Previous echo samples for FIR filter (stereo, 8 taps).
-    echo_hist_l: [i16; 8],
-    echo_hist_r: [i16; 8],
+    echo_hist_l: [i32; 8],
+    echo_hist_r: [i32; 8],
     echo_hist_pos: usize,
-    /// Global tick counter for envelope timing.
-    tick_counter: u32,
+    noise: i16,
+    new_kon: u8,
 }
 
 impl Dsp {
@@ -120,47 +143,37 @@ impl Dsp {
             regs: [0; 128],
             addr_reg: 0,
             voices: std::array::from_fn(|_| Voice::default()),
+            global_counter: 0,
             echo_pos: 0,
             echo_length: 0,
             echo_hist_l: [0; 8],
             echo_hist_r: [0; 8],
             echo_hist_pos: 0,
-            tick_counter: 0,
+            noise: -(1 << 14),
+            new_kon: 0,
         }
     }
 
-    /// Read a DSP register.
     pub fn read(&self, addr: u8) -> u8 {
         let addr = addr & 0x7F;
-        match addr {
-            ENDX => self.regs[ENDX as usize],
-            _ => {
-                let voice = (addr >> 4) as usize;
-                let reg = addr & 0x0F;
-                if voice < 8 {
-                    match reg {
-                        0x08 => (self.voices[voice].env_level >> 4) as u8, // ENVX
-                        0x09 => 0, // OUTX (stub — would need last sample)
-                        _ => self.regs[addr as usize],
-                    }
-                } else {
-                    self.regs[addr as usize]
-                }
-            }
+        let voice = (addr >> 4) as usize;
+        let reg = addr & 0x0F;
+        if voice < 8 && reg == 0x08 {
+            (self.voices[voice].env_level >> 4) as u8
+        } else {
+            self.regs[addr as usize]
         }
     }
 
-    /// Write a DSP register.
     pub fn write(&mut self, addr: u8, val: u8) {
         let addr = addr & 0x7F;
         self.regs[addr as usize] = val;
 
-        let voice_idx = (addr >> 4) as usize;
+        let vi = (addr >> 4) as usize;
         let reg = addr & 0x0F;
 
-        // Update voice state from register writes.
-        if voice_idx < 8 {
-            let v = &mut self.voices[voice_idx];
+        if vi < 8 {
+            let v = &mut self.voices[vi];
             match reg {
                 0x00 => v.vol_l = val as i8,
                 0x01 => v.vol_r = val as i8,
@@ -174,338 +187,315 @@ impl Dsp {
             }
         }
 
-        // Handle global register writes.
         match addr {
-            KON => {
-                for i in 0..8 {
-                    if val & (1 << i) != 0 {
-                        self.key_on_voice(i);
-                    }
-                }
-            }
+            KON => { self.new_kon = val; }
             KOFF => {
-                for i in 0..8 {
-                    if val & (1 << i) != 0 {
-                        self.voices[i].env_phase = EnvPhase::Release;
-                    }
-                }
+                for i in 0..8 { if val & (1 << i) != 0 { self.voices[i].env_phase = EnvPhase::Release; } }
             }
-            ENDX => {
-                // Writing any value clears ENDX.
-                self.regs[ENDX as usize] = 0;
-            }
-            EDL => {
-                let delay = (val & 0x0F) as u16;
-                self.echo_length = delay * 2048; // Each unit = 2KB
-            }
+            ENDX => { self.regs[ENDX as usize] = 0; }
+            EDL => { self.echo_length = (val & 0x0F) as u16 * 2048; }
             _ => {}
         }
     }
 
-    /// Key on a voice: reset BRR decoding and start attack phase.
-    fn key_on_voice(&mut self, idx: usize) {
-        let v = &mut self.voices[idx];
-        v.key_on = true;
-        v.end_flag = false;
-        v.env_level = 0;
-        v.env_phase = EnvPhase::Attack;
-        v.env_counter = 0;
-        v.pitch_counter = 0;
-        v.brr_offset = 0;
-        v.brr_old = [0; 2];
-        // BRR start address will be looked up from the sample directory.
+    /// Check if a rate fires this tick (global counter system).
+    fn rate_fires(&self, rate: usize) -> bool {
+        if rate == 0 || rate >= 32 { return false; }
+        let period = COUNTER_RATES[rate] as u32;
+        if period == 0 { return true; }
+        (self.global_counter.wrapping_add(COUNTER_OFFSETS[rate] as u32)) % period == 0
+    }
+
+    /// Decode one BRR block (16 samples) into the voice's ring buffer.
+    /// Uses blargg's half-precision scheme with clamp-then-double.
+    fn decode_brr(ram: &[u8; 65536], v: &mut Voice) {
+        let addr = v.brr_addr as usize;
+        let header = ram[addr & 0xFFFF];
+        v.brr_header = header;
+        let shift = (header >> 4) & 0x0F;
+        let filter = (header >> 2) & 0x03;
+
+        for i in 0..16usize {
+            let byte = ram[(addr + 1 + i / 2) & 0xFFFF];
+            let nibble = if i & 1 == 0 { byte >> 4 } else { byte & 0x0F };
+
+            let mut s = (((nibble as i8) << 4) >> 4) as i32;
+
+            s = if shift <= 12 {
+                (s << shift) >> 1
+            } else if s < 0 {
+                -2048
+            } else {
+                0
+            };
+
+            let p1_idx = (v.brr_buf_pos + 12 - 1) % 12;
+            let p2_idx = (v.brr_buf_pos + 12 - 2) % 12;
+            let p1 = v.brr_buf[p1_idx];
+            let p2 = v.brr_buf[p2_idx] >> 1;
+
+            match filter {
+                1 => {
+                    s += p1 >> 1;
+                    s += (-p1) >> 5;
+                }
+                2 => {
+                    s += p1;
+                    s -= p2;
+                    s += p2 >> 4;
+                    s += (p1 * -3) >> 6;
+                }
+                3 => {
+                    s += p1;
+                    s -= p2;
+                    s += (p1 * -13) >> 7;
+                    s += (p2 * 3) >> 4;
+                }
+                _ => {}
+            }
+
+            s = clamp16(s);
+            s = (s as i16).wrapping_mul(2) as i32;
+
+            v.brr_buf[v.brr_buf_pos] = s;
+            v.brr_buf_pos = (v.brr_buf_pos + 1) % 12;
+        }
     }
 
     /// Generate one stereo sample pair (called at 32 kHz).
     pub fn generate_sample(&mut self, ram: &[u8; 65536]) -> (i16, i16) {
         let dir_base = (self.regs[DIR as usize] as u16) << 8;
         let mute = self.regs[FLG as usize] & 0x40 != 0;
-        let noise_clock = self.regs[FLG as usize] & 0x1F;
-        let _ = noise_clock; // TODO: noise generation
 
-        let mut mix_l: i32 = 0;
-        let mut mix_r: i32 = 0;
-        let mut echo_in_l: i32 = 0;
-        let mut echo_in_r: i32 = 0;
+        // Process KON.
+        let kon = self.new_kon;
+        self.new_kon = 0;
+        for i in 0..8u8 {
+            if kon & (1 << i) != 0 {
+                let v = &mut self.voices[i as usize];
+                v.env_phase = EnvPhase::Attack;
+                v.env_level = 0;
+                v.hidden_env = 0;
+                v.interp_pos = 0;
+                v.brr_buf = [0; 12];
+                v.brr_buf_pos = 0;
+                let dir_entry = dir_base.wrapping_add((v.srcn as u16) * 4);
+                v.brr_addr = ram[dir_entry as usize] as u16
+                    | ((ram[dir_entry.wrapping_add(1) as usize] as u16) << 8);
+                Self::decode_brr(ram, v);
+                self.regs[ENDX as usize] &= !(1 << i);
+            }
+        }
+
+        // Noise LFSR.
+        let noise_rate = (self.regs[FLG as usize] & 0x1F) as usize;
+        if noise_rate > 0 && self.rate_fires(noise_rate) {
+            let bit = (self.noise as i32 >> 13) ^ (self.noise as i32 >> 14);
+            self.noise = (((self.noise as i32) << 1) | (bit & 1)) as i16;
+        }
+
+        let noise_enabled = self.regs[0x3D];
+        let echo_on = self.regs[EON as usize];
+
+        let mut main_l: i32 = 0;
+        let mut main_r: i32 = 0;
+        let mut echo_l: i32 = 0;
+        let mut echo_r: i32 = 0;
 
         for i in 0..8u8 {
             let v = &mut self.voices[i as usize];
             if v.env_phase == EnvPhase::Off { continue; }
 
-            // Look up sample directory entry if starting a new sample.
-            if v.key_on && v.brr_offset == 0 && v.pitch_counter == 0 {
-                let dir_entry = dir_base.wrapping_add((v.srcn as u16) * 4);
-                let start = ram[dir_entry as usize] as u16
-                    | ((ram[dir_entry.wrapping_add(1) as usize] as u16) << 8);
-                v.brr_addr = start;
-                v.key_on = false;
-                // Decode first BRR block.
-                Self::decode_brr_block(ram, v);
-            }
-
-            // Get interpolated sample from BRR buffer.
-            let sample_idx = (v.pitch_counter >> 12) as usize;
-            let sample = if sample_idx < 16 {
-                v.brr_buffer[sample_idx] as i32
+            // ── Interpolated sample ───────────────────────────
+            let output = if noise_enabled & (1 << i) != 0 {
+                (self.noise as i32) * 2
             } else {
-                0
+                let offset = ((v.interp_pos >> 4) & 0xFF) as usize;
+                let base = ((v.interp_pos >> 12) & 0x03) as usize;
+
+                // Read 4 samples from ring buffer for Gaussian interpolation.
+                let s = |n: usize| -> i32 { v.brr_buf[(v.brr_buf_pos + 12 - 4 + base + n) % 12] };
+
+                let mut out = (GAUSS[255 - offset] as i32 * s(0)) >> 11;
+                out += (GAUSS[511 - offset] as i32 * s(1)) >> 11;
+                out += (GAUSS[256 + offset] as i32 * s(2)) >> 11;
+                out = out as i16 as i32; // 16-bit wrap after 3 terms (hardware bug)
+                out += (GAUSS[offset] as i32 * s(3)) >> 11;
+                clamp16(out) & !1
             };
 
-            // Apply envelope.
-            let env = v.env_level;
-            let output = (sample * env) >> 11;
+            // ── Envelope × sample ─────────────────────────────
+            let amp = ((output * v.env_level) >> 11) & !1;
 
-            // Apply per-voice volume and accumulate.
-            mix_l += (output * v.vol_l as i32) >> 7;
-            mix_r += (output * v.vol_r as i32) >> 7;
+            // ── Volume and accumulate ─────────────────────────
+            let left = (amp * v.vol_l as i32) >> 7;
+            let right = (amp * v.vol_r as i32) >> 7;
+            main_l = clamp16(main_l + left);
+            main_r = clamp16(main_r + right);
 
-            // Echo input.
-            if self.regs[EON as usize] & (1 << i) != 0 {
-                echo_in_l += output;
-                echo_in_r += output;
+            if echo_on & (1 << i) != 0 {
+                echo_l = clamp16(echo_l + left);
+                echo_r = clamp16(echo_r + right);
             }
 
-            // Advance pitch counter.
-            v.pitch_counter = v.pitch_counter.wrapping_add(v.pitch);
+            // ── Advance pitch ─────────────────────────────────
+            v.interp_pos = (v.interp_pos & 0x3FFF) + v.pitch as i32;
+            if v.interp_pos > 0x7FFF { v.interp_pos = 0x7FFF; }
 
-            // Crossed a BRR sample boundary?
-            while v.pitch_counter >= 0x4000 && v.env_phase != EnvPhase::Off {
-                v.pitch_counter -= 0x4000;
-                v.brr_offset += 1;
-                if v.brr_offset >= 16 {
-                    v.brr_offset = 0;
-                    // Advance to next BRR block.
-                    let header = ram[v.brr_addr as usize];
-                    let is_end = header & 0x01 != 0;
-                    let is_loop = header & 0x02 != 0;
-                    if is_end {
-                        self.regs[ENDX as usize] |= 1 << i;
-                        if is_loop {
-                            // Loop: jump to loop address from directory.
-                            let dir_entry = dir_base.wrapping_add((v.srcn as u16) * 4);
-                            let loop_addr = ram[dir_entry.wrapping_add(2) as usize] as u16
-                                | ((ram[dir_entry.wrapping_add(3) as usize] as u16) << 8);
-                            v.brr_addr = loop_addr;
-                        } else {
-                            v.env_phase = EnvPhase::Off;
-                            v.env_level = 0;
-                            break;
-                        }
+            while v.interp_pos >= 0x4000 {
+                v.interp_pos -= 0x4000;
+                let is_end = v.brr_header & 0x01 != 0;
+                let is_loop = v.brr_header & 0x02 != 0;
+                if is_end {
+                    self.regs[ENDX as usize] |= 1 << i;
+                    if is_loop {
+                        let dir_entry = dir_base.wrapping_add((v.srcn as u16) * 4);
+                        v.brr_addr = ram[(dir_entry + 2) as usize] as u16
+                            | ((ram[(dir_entry + 3) as usize] as u16) << 8);
                     } else {
-                        v.brr_addr = v.brr_addr.wrapping_add(9);
+                        v.env_phase = EnvPhase::Off;
+                        v.env_level = 0;
+                        break;
                     }
-                    Self::decode_brr_block(ram, v);
+                } else {
+                    v.brr_addr = v.brr_addr.wrapping_add(9);
                 }
+                Self::decode_brr(ram, v);
             }
 
-            // Update envelope.
-            Self::update_envelope(v);
+            // ── Envelope update ───────────────────────────────
+            Self::update_envelope_step(v, self.global_counter);
         }
 
-        self.tick_counter += 1;
+        self.global_counter = self.global_counter.wrapping_add(1);
 
-        // Apply master volume.
+        if mute { return (0, 0); }
+
+        // ── Echo ──────────────────────────────────────────────
+        let echo_out = self.process_echo(ram, echo_l as i16, echo_r as i16);
+
+        // ── Final mix ─────────────────────────────────────────
         let mvol_l = self.regs[MVOL_L as usize] as i8 as i32;
         let mvol_r = self.regs[MVOL_R as usize] as i8 as i32;
-
-        if mute {
-            return (0, 0);
-        }
-
-        // Simple echo processing (FIR filter on echo buffer).
-        let echo_out = self.process_echo(ram, echo_in_l as i16, echo_in_r as i16);
-
         let evol_l = self.regs[EVOL_L as usize] as i8 as i32;
         let evol_r = self.regs[EVOL_R as usize] as i8 as i32;
 
-        let out_l = ((mix_l * mvol_l) >> 7) + ((echo_out.0 as i32 * evol_l) >> 7);
-        let out_r = ((mix_r * mvol_r) >> 7) + ((echo_out.1 as i32 * evol_r) >> 7);
+        let out_l = clamp16(((main_l * mvol_l) >> 7) + ((echo_out.0 as i32 * evol_l) >> 7));
+        let out_r = clamp16(((main_r * mvol_r) >> 7) + ((echo_out.1 as i32 * evol_r) >> 7));
 
-        (out_l.clamp(-32768, 32767) as i16, out_r.clamp(-32768, 32767) as i16)
+        (out_l as i16, out_r as i16)
     }
 
-    /// Decode one 9-byte BRR block into 16 samples.
-    fn decode_brr_block(ram: &[u8; 65536], v: &mut Voice) {
-        let addr = v.brr_addr as usize;
-        let header = ram[addr & 0xFFFF];
-        let shift = (header >> 4) & 0x0F;
-        let filter = (header >> 2) & 0x03;
+    /// Update envelope for one voice (static to avoid borrow issues).
+    fn update_envelope_step(v: &mut Voice, counter: u32) {
+        // Helper: check rate against global counter.
+        let fires = |rate: usize| -> bool {
+            if rate == 0 || rate >= 32 { return false; }
+            let period = COUNTER_RATES[rate] as u32;
+            (counter.wrapping_add(COUNTER_OFFSETS[rate] as u32)) % period == 0
+        };
 
-        for i in 0..16 {
-            let byte = ram[(addr + 1 + i / 2) & 0xFFFF];
-            let nibble = if i & 1 == 0 { byte >> 4 } else { byte & 0x0F };
-
-            // Sign-extend 4-bit to 16-bit.
-            let mut s = ((nibble as i16) << 12) >> 12;
-
-            // Apply shift.
-            if shift <= 12 {
-                s = (s << shift) >> 1;
-            } else {
-                s = if s < 0 { -(1 << 11) } else { 0 };
+        match v.env_phase {
+            EnvPhase::Off => return,
+            EnvPhase::Release => {
+                // Release fires every sample, no counter gating.
+                v.env_level -= 8;
+                if v.env_level <= 0 { v.env_level = 0; v.env_phase = EnvPhase::Off; }
+                return;
             }
-
-            // Apply prediction filter using previous samples.
-            let p1 = v.brr_old[0] as i32;
-            let p2 = v.brr_old[1] as i32;
-
-            let filtered = s as i32 + match filter {
-                0 => 0,
-                1 => p1 - (p1 >> 4),
-                2 => p1 * 2 + ((-p1 * 3) >> 5) - p2 + (p2 >> 4),
-                3 => p1 * 2 + ((-p1 * 13) >> 6) - p2 + ((p2 * 3) >> 4),
-                _ => 0,
-            };
-
-            let clamped = filtered.clamp(-32768, 32767) as i16;
-            v.brr_old[1] = v.brr_old[0];
-            v.brr_old[0] = clamped;
-            v.brr_buffer[i] = clamped;
+            _ => {}
         }
-    }
 
-    /// Update ADSR/GAIN envelope for one voice.
-    fn update_envelope(v: &mut Voice) {
-        if v.env_phase == EnvPhase::Off { return; }
-
-        let use_adsr = v.adsr1 & 0x80 != 0;
-
-        if use_adsr {
+        if v.adsr1 & 0x80 != 0 {
+            // ADSR mode.
             match v.env_phase {
                 EnvPhase::Attack => {
-                    let rate = ((v.adsr1 & 0x0F) as u16) * 2 + 1;
-                    let step = if rate == 31 { 1024 } else { 32 };
-                    if Self::env_tick(v, rate) {
-                        v.env_level += step;
-                        if v.env_level >= 0x7FF {
-                            v.env_level = 0x7FF;
-                            v.env_phase = EnvPhase::Decay;
-                        }
+                    let rate = ((v.adsr1 & 0x0F) as usize) * 2 + 1;
+                    if fires(rate) {
+                        v.env_level += if rate == 31 { 1024 } else { 32 };
+                        if v.env_level >= 0x7FF { v.env_level = 0x7FF; v.env_phase = EnvPhase::Decay; }
                     }
                 }
                 EnvPhase::Decay => {
-                    let rate = ((v.adsr1 >> 4) & 0x07) as u16 * 2 + 16;
-                    if Self::env_tick(v, rate) {
-                        v.env_level -= ((v.env_level - 1) >> 8) + 1;
-                        let sustain_level = ((v.adsr2 >> 5) as i32 + 1) * 0x100;
-                        if v.env_level <= sustain_level {
-                            v.env_phase = EnvPhase::Sustain;
-                        }
+                    let rate = (((v.adsr1 >> 3) & 0x0E) + 0x10) as usize;
+                    if fires(rate) {
+                        v.env_level -= 1;
+                        v.env_level -= v.env_level >> 8;
+                        let sustain = ((v.adsr2 >> 5) as i32 + 1) * 0x100;
+                        if v.env_level <= sustain { v.env_phase = EnvPhase::Sustain; }
                     }
                 }
                 EnvPhase::Sustain => {
-                    let rate = (v.adsr2 & 0x1F) as u16;
-                    if rate > 0 && Self::env_tick(v, rate) {
-                        v.env_level -= ((v.env_level - 1) >> 8) + 1;
-                        if v.env_level <= 0 {
-                            v.env_level = 0;
-                            v.env_phase = EnvPhase::Off;
-                        }
+                    let rate = (v.adsr2 & 0x1F) as usize;
+                    if fires(rate) {
+                        v.env_level -= 1;
+                        v.env_level -= v.env_level >> 8;
                     }
                 }
-                EnvPhase::Release => {
-                    // Release always decrements by 8 every sample.
-                    v.env_level -= 8;
-                    if v.env_level <= 0 {
-                        v.env_level = 0;
-                        v.env_phase = EnvPhase::Off;
-                    }
-                }
-                EnvPhase::Off => {}
+                _ => {}
             }
         } else {
             // GAIN mode.
-            let mode = v.gain;
-            if mode & 0x80 == 0 {
-                // Direct: set envelope level immediately.
-                v.env_level = ((mode & 0x7F) as i32) << 4;
+            if v.gain & 0x80 == 0 {
+                v.env_level = (v.gain as i32 & 0x7F) * 0x10;
+                v.hidden_env = v.env_level;
             } else {
-                let rate = (mode & 0x1F) as u16;
-                if rate > 0 && Self::env_tick(v, rate) {
-                    match (mode >> 5) & 0x03 {
-                        0 => { // Linear decrease
-                            v.env_level -= 32;
-                        }
-                        1 => { // Exponential decrease
-                            v.env_level -= ((v.env_level - 1) >> 8) + 1;
-                        }
-                        2 => { // Linear increase
-                            v.env_level += 32;
-                        }
-                        3 => { // Bent increase
-                            v.env_level += if v.env_level < 0x600 { 32 } else { 8 };
+                let rate = (v.gain & 0x1F) as usize;
+                let mode = (v.gain >> 5) & 0x03;
+                if fires(rate) {
+                    match mode {
+                        0 => v.env_level -= 32,
+                        1 => { v.env_level -= 1; v.env_level -= v.env_level >> 8; }
+                        2 => v.env_level += 32,
+                        3 => {
+                            v.env_level += if v.hidden_env < 0x600 { 32 } else { 8 };
+                            v.hidden_env = v.env_level;
                         }
                         _ => {}
                     }
                 }
             }
-            v.env_level = v.env_level.clamp(0, 0x7FF);
-            if v.env_level == 0 && v.env_phase == EnvPhase::Release {
-                v.env_phase = EnvPhase::Off;
-            }
         }
+        v.env_level = v.env_level.clamp(0, 0x7FF);
     }
 
-    /// Check if the envelope should tick based on the rate.
-    fn env_tick(v: &mut Voice, rate: u16) -> bool {
-        if rate == 0 || rate as usize >= RATE_TABLE.len() { return false; }
-        let period = RATE_TABLE[rate as usize];
-        if period == 0 { return true; }
-        v.env_counter += 1;
-        if v.env_counter >= period {
-            v.env_counter = 0;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Process echo: read from echo buffer, apply FIR, write back.
     fn process_echo(&mut self, ram: &[u8; 65536], input_l: i16, input_r: i16) -> (i16, i16) {
-        if self.echo_length == 0 {
-            return (0, 0);
-        }
+        if self.echo_length == 0 { return (0, 0); }
 
         let esa = (self.regs[ESA as usize] as u16) << 8;
         let pos = esa.wrapping_add(self.echo_pos) as usize;
 
-        // Read echo sample from buffer.
         let echo_l = ram[pos & 0xFFFF] as i16 | ((ram[(pos + 1) & 0xFFFF] as i16) << 8);
         let echo_r = ram[(pos + 2) & 0xFFFF] as i16 | ((ram[(pos + 3) & 0xFFFF] as i16) << 8);
 
-        // Store in FIR history.
-        self.echo_hist_l[self.echo_hist_pos] = echo_l;
-        self.echo_hist_r[self.echo_hist_pos] = echo_r;
+        let hp = self.echo_hist_pos;
+        self.echo_hist_l[hp] = echo_l as i32;
+        self.echo_hist_r[hp] = echo_r as i32;
 
-        // Apply 8-tap FIR filter.
         let mut fir_l: i32 = 0;
         let mut fir_r: i32 = 0;
         for tap in 0..8 {
             let coeff = self.regs[tap * 0x10 + FIR_BASE as usize] as i8 as i32;
-            let hist_idx = (self.echo_hist_pos + 8 - tap) & 7;
-            fir_l += (self.echo_hist_l[hist_idx] as i32 * coeff) >> 7;
-            fir_r += (self.echo_hist_r[hist_idx] as i32 * coeff) >> 7;
+            let idx = (hp + 8 - tap) & 7;
+            fir_l += (self.echo_hist_l[idx] * coeff) >> 6;
+            fir_r += (self.echo_hist_r[idx] * coeff) >> 6;
         }
+        fir_l = clamp16(fir_l) & !1;
+        fir_r = clamp16(fir_r) & !1;
 
-        self.echo_hist_pos = (self.echo_hist_pos + 1) & 7;
+        self.echo_hist_pos = (hp + 1) & 7;
 
-        // Write back to echo buffer (input + feedback).
-        // Only write if echo write is not disabled (FLG bit 5).
+        // Echo write-back (disabled when FLG bit 5 set).
         if self.regs[FLG as usize] & 0x20 == 0 {
             let efb = self.regs[EFB as usize] as i8 as i32;
-            let write_l = (input_l as i32 + ((fir_l * efb) >> 7)).clamp(-32768, 32767) as i16;
-            let write_r = (input_r as i32 + ((fir_r * efb) >> 7)).clamp(-32768, 32767) as i16;
-            // Note: We'd write to RAM here, but since APU RAM is owned by Apu,
-            // we skip echo writes for now. Full implementation needs &mut ram.
-            let _ = (write_l, write_r);
+            let _write_l = clamp16(input_l as i32 + ((fir_l * efb) >> 7)) as i16;
+            let _write_r = clamp16(input_r as i32 + ((fir_r * efb) >> 7)) as i16;
+            // TODO: write to APU RAM (needs &mut ram).
         }
 
-        // Advance echo position.
         self.echo_pos += 4;
-        if self.echo_pos >= self.echo_length {
-            self.echo_pos = 0;
-        }
+        if self.echo_pos >= self.echo_length { self.echo_pos = 0; }
 
-        (fir_l.clamp(-32768, 32767) as i16, fir_r.clamp(-32768, 32767) as i16)
+        (fir_l as i16, fir_r as i16)
     }
 }

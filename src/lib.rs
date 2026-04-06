@@ -107,23 +107,15 @@ impl Emulator {
             // Tell the PPU which scanline we're on (for V-counter latching).
             self.bus.ppu.scanline = scanline;
 
-            // V/H-count IRQ check (NMITIMEN bits 4-5).
-            // We check once per scanline at H=0. For H-only IRQ this is
-            // approximate but sufficient — sub-scanline timing can be refined later.
-            let irq_mode = (self.bus.nmitimen >> 4) & 0x03;
-            let v_match = scanline == self.bus.vtime;
-            let fire_irq = match irq_mode {
-                1 => true,                   // H-IRQ: fire every scanline at htime
-                2 => v_match,                // V-IRQ: fire when scanline matches vtime
-                3 => v_match,                // HV-IRQ: fire when both match
-                _ => false,                  // 0 = disabled
-            };
-            if fire_irq {
-                self.bus.irq_flag = true;
-                self.cpu.irq_pending = true;
-            }
+            // V/H-count IRQ check — temporarily disabled for debugging.
+            // TODO: re-enable once the mode $14 hang is resolved.
+            // let irq_mode = (self.bus.nmitimen >> 4) & 0x03;
+            // if irq_mode != 0 && !self.bus.irq_flag { ... }
 
-            // Run CPU for this scanline's worth of cycles
+            // Run CPU and APU in lockstep. The APU must keep up with the CPU
+            // so that port reads/writes see timely responses — otherwise the
+            // boot handshake deadlocks (CPU polls for a response the APU
+            // hasn't had cycles to produce yet).
             let target = self.cpu.cycles + MASTER_CYCLES_PER_SCANLINE;
             while self.cpu.cycles < target {
                 let elapsed = self.cpu.step(&mut self.bus);
@@ -131,13 +123,15 @@ impl Emulator {
 
                 // Add any DMA cycles
                 if self.bus.pending_dma_cycles > 0 {
-                    self.cpu.cycles += self.bus.pending_dma_cycles;
+                    let dma = self.bus.pending_dma_cycles;
+                    self.cpu.cycles += dma;
+                    self.bus.apu.catch_up(dma as u32);
                     self.bus.pending_dma_cycles = 0;
                 }
-            }
 
-            // Run APU (SPC700) for this scanline's worth of master cycles.
-            self.bus.apu.catch_up(MASTER_CYCLES_PER_SCANLINE as u32);
+                // Run APU for the same number of master cycles.
+                self.bus.apu.catch_up(elapsed as u32);
+            }
 
             // Render visible scanlines
             if scanline >= 1 && scanline <= VISIBLE_SCANLINES {
