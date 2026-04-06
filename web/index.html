@@ -233,31 +233,15 @@
             });
         }
 
-        async function loadArchiveRom(filename) {
+        function loadArchiveRom(filename) {
             const url = ARCHIVE_DL + encodeURIComponent(filename);
-            status.textContent = `Downloading ${filename}...`;
-
-            // Try direct fetch first, then CORS proxy fallback.
-            const attempts = [
-                url,
-                `https://corsproxy.io/?${encodeURIComponent(url)}`,
-            ];
-
-            for (const fetchUrl of attempts) {
-                try {
-                    const resp = await fetch(fetchUrl);
-                    if (!resp.ok) continue;
-                    const data = new Uint8Array(await resp.arrayBuffer());
-                    if (data.length < 1024) continue; // Too small, probably an error page
-                    status.textContent = `Loaded ${filename} (${Math.round(data.length/1024)} KB)`;
-                    await startEmulator(data);
-                    return;
-                } catch (_) { continue; }
-            }
-
-            // All attempts failed — offer direct download link.
-            status.innerHTML = `Download failed. <a href="${url}"
-                target="_blank" style="color: #c8a84e">Get ${filename} from archive.org</a> then drag it here.`;
+            // Open download in new tab — archive.org will serve the file.
+            window.open(url, '_blank');
+            // Highlight the drop zone and show instructions.
+            dropZone.classList.add('dragover');
+            status.innerHTML = `Downloading <strong>${filename}</strong> — once saved, drag the file onto the box above.`;
+            // Remove highlight after a few seconds.
+            setTimeout(() => dropZone.classList.remove('dragover'), 5000);
         }
 
         // ── Emulator lifecycle ────────────────────────────────
