@@ -76,7 +76,7 @@
             <input type="text" id="rom-search" placeholder="Search 746 SNES ROMs..."
                 style="background: #1a1a1a; color: #eee; border: 1px solid #444; border-radius: 4px;
                        padding: 6px 10px; width: 260px; font-family: inherit; font-size: 0.8rem;">
-            <div id="rom-list" style="max-height: 200px; overflow-y: auto; margin-top: 0.5rem;
+            <div id="rom-list" style="max-height: 400px; overflow-y: auto; margin-top: 0.5rem;
                 text-align: left; font-size: 0.75rem;"></div>
         </div>
     </div>
@@ -214,7 +214,7 @@
             const list = document.getElementById('rom-list');
             const term = filter.toLowerCase();
             const matches = romCatalog.filter(r => r.title.toLowerCase().includes(term));
-            const shown = matches.slice(0, 50); // Cap displayed results
+            const shown = matches; // Show all matches
 
             list.innerHTML = shown.map(r =>
                 `<div class="rom-entry" data-name="${r.name}"
@@ -225,9 +225,6 @@
                 </div>`
             ).join('');
 
-            if (matches.length > 50) {
-                list.innerHTML += `<div style="padding: 4px 8px; color: #555">... ${matches.length - 50} more — type to filter</div>`;
-            }
 
             // Click handler for ROM entries.
             list.querySelectorAll('.rom-entry').forEach(el => {
