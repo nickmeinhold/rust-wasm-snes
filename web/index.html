@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>SNES — A Link to the Past</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #111;
+            color: #eee;
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        h1 {
+            font-size: 1.2rem;
+            color: #c8a84e;
+            margin-bottom: 0.5rem;
+            letter-spacing: 0.1em;
+        }
+        #screen {
+            border: 3px solid #333;
+            border-radius: 4px;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            cursor: none;
+        }
+        .controls {
+            margin-top: 1rem;
+            font-size: 0.8rem;
+            color: #666;
+            text-align: center;
+            line-height: 1.6;
+        }
+        .controls kbd {
+            background: #222;
+            border: 1px solid #444;
+            border-radius: 3px;
+            padding: 1px 5px;
+            font-size: 0.75rem;
+        }
+        #status {
+            margin-top: 0.5rem;
+            font-size: 0.75rem;
+            color: #555;
+        }
+        #drop-zone {
+            border: 2px dashed #444;
+            border-radius: 8px;
+            padding: 3rem 4rem;
+            text-align: center;
+            color: #666;
+            cursor: pointer;
+            transition: border-color 0.2s, color 0.2s;
+        }
+        #drop-zone:hover, #drop-zone.dragover {
+            border-color: #c8a84e;
+            color: #c8a84e;
+        }
+        #drop-zone input { display: none; }
+    </style>
+</head>
+<body>
+    <h1>THE LEGEND OF ZELDA — A LINK TO THE PAST</h1>
+
+    <!-- ROM loader (shown before game starts) -->
+    <div id="drop-zone">
+        <p>Drop your <strong>.smc</strong> ROM here</p>
+        <p style="margin-top: 0.5rem; font-size: 0.8rem">or click to browse</p>
+        <input type="file" id="rom-input" accept=".smc,.sfc,.zip">
+    </div>
+
+    <!-- Game canvas (hidden until ROM loaded) -->
+    <canvas id="screen" width="256" height="224" style="display: none"></canvas>
+
+    <div class="controls">
+        <kbd>←</kbd><kbd>↑</kbd><kbd>↓</kbd><kbd>→</kbd> Move &nbsp;
+        <kbd>Z</kbd> B &nbsp; <kbd>X</kbd> Y &nbsp;
+        <kbd>A</kbd> A &nbsp; <kbd>S</kbd> X &nbsp;
+        <kbd>Q</kbd> L &nbsp; <kbd>W</kbd> R &nbsp;
+        <kbd>Enter</kbd> Start &nbsp; <kbd>Tab</kbd> Select
+    </div>
+    <div id="status"></div>
+
+    <script type="module">
+        import init, { Emulator } from './pkg/zelda_a_link_to_the_past.js';
+
+        let emulator = null;
+        let animFrameId = null;
+
+        const canvas = document.getElementById('screen');
+        const ctx = canvas.getContext('2d');
+        const status = document.getElementById('status');
+        const dropZone = document.getElementById('drop-zone');
+        const romInput = document.getElementById('rom-input');
+
+        // Scale the canvas display size (CSS pixels) while keeping
+        // the internal resolution at native 256×224.
+        const SCALE = 3;
+        canvas.style.width = `${256 * SCALE}px`;
+        canvas.style.height = `${224 * SCALE}px`;
+
+        // ── Button mapping ────────────────────────────────────
+        const KEY_MAP = {
+            'KeyZ':      0x8000, // B
+            'KeyX':      0x4000, // Y
+            'Tab':       0x2000, // Select
+            'Enter':     0x1000, // Start
+            'ArrowUp':   0x0800,
+            'ArrowDown': 0x0400,
+            'ArrowLeft': 0x0200,
+            'ArrowRight':0x0100,
+            'KeyA':      0x0080, // A
+            'KeyS':      0x0040, // X
+            'KeyQ':      0x0020, // L
+            'KeyW':      0x0010, // R
+        };
+
+        // ── ROM loading ───────────────────────────────────────
+
+        dropZone.addEventListener('click', () => romInput.click());
+        romInput.addEventListener('change', (e) => loadFile(e.target.files[0]));
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) {
+                loadFile(e.dataTransfer.files[0]);
+            }
+        });
+
+        async function loadFile(file) {
+            if (!file) return;
+            status.textContent = `Loading ${file.name}...`;
+
+            let data;
+            if (file.name.endsWith('.zip')) {
+                // Basic ZIP support: find the .smc/.sfc inside
+                status.textContent = 'ZIP files not yet supported — please extract the .smc first';
+                return;
+            } else {
+                data = new Uint8Array(await file.arrayBuffer());
+            }
+
+            await startEmulator(data);
+        }
+
+        // ── Auto-load ROM if available ────────────────────────
+        (async () => {
+            try {
+                const resp = await fetch('rom/zelda3.smc');
+                if (resp.ok) {
+                    const data = new Uint8Array(await resp.arrayBuffer());
+                    status.textContent = 'Auto-loading ROM...';
+                    await startEmulator(data);
+                }
+            } catch (_) { /* no auto-load, use drag-and-drop */ }
+        })();
+
+        // ── Emulator lifecycle ────────────────────────────────
+
+        async function startEmulator(romData) {
+            console.log('Initializing WASM...');
+            await init();
+            console.log('WASM ready. Creating emulator...');
+
+            try {
+                emulator = new Emulator(romData);
+            } catch (e) {
+                status.textContent = `Error: ${e}`;
+                console.error('Emulator error:', e);
+                return;
+            }
+            console.log('Emulator created! Starting game loop...');
+
+            // Show canvas, hide drop zone
+            dropZone.style.display = 'none';
+            canvas.style.display = 'block';
+            canvas.focus();
+
+            // ── Web Audio setup ─────────────────────────────────
+            // Audio requires a user gesture to start. We create the
+            // AudioContext on first interaction, then start playing.
+            let audioCtx = null;
+            let audioStarted = false;
+            // Ring buffer: accumulate samples from WASM, drain in ScriptProcessor.
+            const audioRingBuffer = [];
+            const AUDIO_BUFFER_TARGET = 2048; // samples (stereo pairs) to buffer
+
+            function initAudio() {
+                if (audioStarted) return;
+                audioStarted = true;
+                try {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+                        sampleRate: 32000
+                    });
+                    // ScriptProcessorNode: simple and widely supported.
+                    // bufferSize=2048 → ~64ms latency at 32kHz.
+                    const processor = audioCtx.createScriptProcessor(2048, 0, 2);
+                    processor.onaudioprocess = (e) => {
+                        const left = e.outputBuffer.getChannelData(0);
+                        const right = e.outputBuffer.getChannelData(1);
+                        const needed = left.length;
+
+                        for (let i = 0; i < needed; i++) {
+                            if (audioRingBuffer.length >= 2) {
+                                left[i] = audioRingBuffer.shift() / 32768;
+                                right[i] = audioRingBuffer.shift() / 32768;
+                            } else {
+                                left[i] = 0;
+                                right[i] = 0;
+                            }
+                        }
+                    };
+                    processor.connect(audioCtx.destination);
+                    console.log('Audio initialized: 32kHz stereo via ScriptProcessor');
+                } catch (err) {
+                    console.warn('Audio init failed:', err);
+                }
+            }
+
+            // Start audio on first user interaction (browser policy).
+            const startAudioOnGesture = () => {
+                initAudio();
+                document.removeEventListener('keydown', startAudioOnGesture);
+                document.removeEventListener('click', startAudioOnGesture);
+            };
+            document.addEventListener('keydown', startAudioOnGesture);
+            document.addEventListener('click', startAudioOnGesture);
+
+            // Start the game loop
+            let lastTime = performance.now();
+            let frameAccumulator = 0;
+            const FRAME_TIME = 1000 / 60.0988; // NTSC ~60.1 fps
+
+            function gameLoop(now) {
+                frameAccumulator += now - lastTime;
+                lastTime = now;
+
+                // Run up to 2 frames per rAF to catch up, but cap to avoid spiral
+                let framesRun = 0;
+                while (frameAccumulator >= FRAME_TIME && framesRun < 2) {
+                    const rgba = emulator.run_frame();
+                    const imageData = new ImageData(new Uint8ClampedArray(rgba), 256, 224);
+                    ctx.putImageData(imageData, 0, 0);
+
+                    // Drain audio samples from the APU and push to ring buffer.
+                    if (audioStarted) {
+                        const samples = emulator.get_audio_samples();
+                        // Prevent buffer from growing unbounded.
+                        if (audioRingBuffer.length < AUDIO_BUFFER_TARGET * 4) {
+                            for (let i = 0; i < samples.length; i++) {
+                                audioRingBuffer.push(samples[i]);
+                            }
+                        }
+                    }
+
+                    frameAccumulator -= FRAME_TIME;
+                    framesRun++;
+                }
+
+                if (frameAccumulator > FRAME_TIME * 3) {
+                    frameAccumulator = 0; // Reset if too far behind
+                }
+
+                const fc = emulator.frame_count();
+                if (fc % 30n === 0n) {
+                    const dbg = emulator.dump_full_state();
+                    console.log(dbg);
+                    status.textContent = `Frame ${fc}`;
+                }
+
+                animFrameId = requestAnimationFrame(gameLoop);
+            }
+
+            animFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        // ── Input handling ────────────────────────────────────
+
+        document.addEventListener('keydown', (e) => {
+            if (!emulator) return;
+            const btn = KEY_MAP[e.code];
+            if (btn !== undefined) {
+                e.preventDefault();
+                emulator.set_button(btn, true);
+                console.log('DOWN:', e.code, '→', btn.toString(16));
+            }
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (!emulator) return;
+            const btn = KEY_MAP[e.code];
+            if (btn !== undefined) {
+                e.preventDefault();
+                emulator.set_button(btn, false);
+            }
+        });
+    </script>
+</body>
+</html>
