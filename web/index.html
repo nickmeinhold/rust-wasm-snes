@@ -89,7 +89,8 @@
         <kbd>Z</kbd> B &nbsp; <kbd>X</kbd> Y &nbsp;
         <kbd>A</kbd> A &nbsp; <kbd>S</kbd> X &nbsp;
         <kbd>Q</kbd> L &nbsp; <kbd>W</kbd> R &nbsp;
-        <kbd>Enter</kbd> Start &nbsp; <kbd>Tab</kbd> Select
+        <kbd>Enter</kbd> Start &nbsp; <kbd>Tab</kbd> Select &nbsp;
+        <kbd>Esc</kbd> <span id="back-btn" style="cursor:pointer; color:#c8a84e; text-decoration:underline">Back to ROM list</span>
     </div>
     <div id="status"></div>
 
@@ -378,15 +379,32 @@
             animFrameId = requestAnimationFrame(gameLoop);
         }
 
+        // ── Back to ROM list ─────────────────────────────────
+
+        function stopEmulator() {
+            if (animFrameId) { cancelAnimationFrame(animFrameId); animFrameId = null; }
+            if (audioCtx) { audioCtx.close(); audioCtx = null; audioStarted = false; }
+            emulator = null;
+            canvas.style.display = 'none';
+            dropZone.style.display = '';
+            status.textContent = '';
+            ringWrite = 0; ringRead = 0;
+        }
+
+        document.getElementById('back-btn').addEventListener('click', stopEmulator);
+
         // ── Input handling ────────────────────────────────────
 
         document.addEventListener('keydown', (e) => {
+            if (e.code === 'Escape' && emulator) {
+                stopEmulator();
+                return;
+            }
             if (!emulator) return;
             const btn = KEY_MAP[e.code];
             if (btn !== undefined) {
                 e.preventDefault();
                 emulator.set_button(btn, true);
-                console.log('DOWN:', e.code, '→', btn.toString(16));
             }
         });
 
