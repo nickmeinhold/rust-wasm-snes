@@ -200,6 +200,7 @@
                 document.getElementById('rom-picker').style.display = 'block';
                 renderRomList('');
 
+                document.getElementById('rom-search').addEventListener('click', (e) => e.stopPropagation());
                 document.getElementById('rom-search').addEventListener('input', (e) => {
                     renderRomList(e.target.value);
                 });
@@ -229,7 +230,7 @@
 
             // Click handler for ROM entries.
             list.querySelectorAll('.rom-entry').forEach(el => {
-                el.addEventListener('click', () => loadArchiveRom(el.dataset.name));
+                el.addEventListener('click', (e) => { e.stopPropagation(); loadArchiveRom(el.dataset.name); });
             });
         }
 
