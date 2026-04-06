@@ -234,19 +234,30 @@
         }
 
         async function loadArchiveRom(filename) {
+            const url = ARCHIVE_DL + encodeURIComponent(filename);
             status.textContent = `Downloading ${filename}...`;
-            try {
-                const resp = await fetch(ARCHIVE_DL + encodeURIComponent(filename));
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                const data = new Uint8Array(await resp.arrayBuffer());
-                status.textContent = `Loaded ${filename} (${Math.round(data.length/1024)} KB)`;
-                await startEmulator(data);
-            } catch (err) {
-                // CORS block or network error — offer direct download link instead.
-                status.innerHTML = `CORS blocked. <a href="${ARCHIVE_DL + encodeURIComponent(filename)}"
-                    target="_blank" style="color: #c8a84e">Download ${filename}</a> then drag it here.`;
-                console.warn('Archive fetch failed (likely CORS):', err);
+
+            // Try direct fetch first, then CORS proxy fallback.
+            const attempts = [
+                url,
+                `https://corsproxy.io/?${encodeURIComponent(url)}`,
+            ];
+
+            for (const fetchUrl of attempts) {
+                try {
+                    const resp = await fetch(fetchUrl);
+                    if (!resp.ok) continue;
+                    const data = new Uint8Array(await resp.arrayBuffer());
+                    if (data.length < 1024) continue; // Too small, probably an error page
+                    status.textContent = `Loaded ${filename} (${Math.round(data.length/1024)} KB)`;
+                    await startEmulator(data);
+                    return;
+                } catch (_) { continue; }
             }
+
+            // All attempts failed — offer direct download link.
+            status.innerHTML = `Download failed. <a href="${url}"
+                target="_blank" style="color: #c8a84e">Get ${filename} from archive.org</a> then drag it here.`;
         }
 
         // ── Emulator lifecycle ────────────────────────────────
