@@ -436,14 +436,15 @@ impl Dsp {
             v.interp_pos = (v.interp_pos & 0x3FFF) + pitch;
             if v.interp_pos > 0x7FFF { v.interp_pos = 0x7FFF; }
 
-            // When interp_pos crosses 0x4000, we need the next group of 4 samples.
-            if v.interp_pos >= 0x4000 {
+            // Decode on demand: each 0x4000 step consumes one 4-sample group.
+            // High pitches (>0x4000) can cross multiple groups per sample.
+            while v.interp_pos >= 0x4000 {
                 v.interp_pos -= 0x4000;
                 // If we've consumed all 4 groups in this block, advance to next.
                 if v.brr_offset > 8 {
                     if !Self::advance_brr_block(&mut self.regs, ram, v, i) {
                         // Voice ended (no loop). Skip further processing.
-                        continue;
+                        break;
                     }
                 }
                 Self::decode_brr_group(ram, v);
