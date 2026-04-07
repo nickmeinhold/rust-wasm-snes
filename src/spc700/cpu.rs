@@ -163,7 +163,16 @@ impl Spc700 {
     // ─── Main step: execute one instruction ─────────────
 
     pub fn step(&mut self, bus: &mut ApuBus) -> u8 {
+        #[cfg(feature = "trace")]
+        let trace_pc = self.pc;
+
         let op = self.read_pc(bus);
+
+        #[cfg(feature = "trace")]
+        eprintln!(
+            "PC:{:04X} OP:{:02X} A:{:02X} X:{:02X} Y:{:02X} SP:{:02X} PSW:{:02X}",
+            trace_pc, op, self.a, self.x, self.y, self.sp, self.psw
+        );
 
         match op {
             // ═══ NOP / Flag operations ═══
@@ -465,9 +474,9 @@ impl Spc700 {
             0x4D => { self.push(bus, self.x); 4 } // PUSH X
             0x6D => { self.push(bus, self.y); 4 } // PUSH Y
             0x0D => { self.push(bus, self.psw); 4 } // PUSH PSW
-            0xAE => { self.a = self.pop(bus); self.set_nz(self.a); 4 } // POP A
-            0xCE => { self.x = self.pop(bus); self.set_nz(self.x); 4 } // POP X
-            0xEE => { self.y = self.pop(bus); self.set_nz(self.y); 4 } // POP Y
+            0xAE => { self.a = self.pop(bus); 4 } // POP A (no flag change)
+            0xCE => { self.x = self.pop(bus); 4 } // POP X (no flag change)
+            0xEE => { self.y = self.pop(bus); 4 } // POP Y (no flag change)
             0x8E => { self.psw = self.pop(bus); 4 } // POP PSW
 
             // ═══ CALL / RET ═══
@@ -680,7 +689,10 @@ impl Spc700 {
                 let result = self.y as u16 * self.a as u16;
                 self.a = result as u8;
                 self.y = (result >> 8) as u8;
-                self.set_nz(self.y);
+                // N flag from Y (high byte), Z flag from entire 16-bit result.
+                self.psw = (self.psw & !(N | Z))
+                    | (self.y & 0x80) // N from high byte
+                    | if result == 0 { Z } else { 0 };
                 9
             }
             0x9E => { // DIV YA, X

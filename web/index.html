@@ -313,7 +313,7 @@
             // Efficient ring buffer: fixed-size Float32Array with read/write cursors.
             // Avoids Array.shift() which is O(n) and freezes on large buffers.
             const RING_SIZE = 65536; // Must be power of 2
-            const AUDIO_GAIN = 8; // Amplify DSP output (raw samples are ~4% of max)
+            const AUDIO_GAIN = 4; // Amplify DSP output (peak ~15% after CPU fixes)
             const ringL = new Float32Array(RING_SIZE);
             const ringR = new Float32Array(RING_SIZE);
             let ringWrite = 0;
