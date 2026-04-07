@@ -204,7 +204,7 @@ impl Spc700 {
             0x15 => { let addr = self.read_pc16(bus).wrapping_add(self.x as u16); let v = bus.read(addr); self.a = self.op_or(self.a, v); 5 }
             0x16 => { let addr = self.read_pc16(bus).wrapping_add(self.y as u16); let v = bus.read(addr); self.a = self.op_or(self.a, v); 5 }
             0x17 => { let dp = self.read_pc(bus); let addr = bus.read(self.dp(dp)) as u16 | ((bus.read(self.dp(dp.wrapping_add(1))) as u16) << 8); let v = bus.read(addr.wrapping_add(self.y as u16)); self.a = self.op_or(self.a, v); 6 }
-            0x09 => { let src = self.read_pc(bus); let dst = self.read_pc(bus); let a = bus.read(self.dp(dst)); let b = bus.read(self.dp(src)); let r = self.op_or(a, b); bus.write(self.dp(dst), r); 6 }
+            0x09 => { let ds = self.read_pc(bus); let dd = self.read_pc(bus); let a = bus.read(self.dp(dd)); let b = bus.read(self.dp(ds)); let r = self.op_or(a, b); bus.write(self.dp(dd), r); 6 }
             0x18 => { let imm = self.read_pc(bus); let dp = self.read_pc(bus); let a = bus.read(self.dp(dp)); let r = self.op_or(a, imm); bus.write(self.dp(dp), r); 5 }
             0x19 => { let a = bus.read(self.dp(self.x)); let b = bus.read(self.dp(self.y)); let r = self.op_or(a, b); bus.write(self.dp(self.x), r); 5 }
 
@@ -218,7 +218,7 @@ impl Spc700 {
             0x35 => { let addr = self.read_pc16(bus).wrapping_add(self.x as u16); let v = bus.read(addr); self.a = self.op_and(self.a, v); 5 }
             0x36 => { let addr = self.read_pc16(bus).wrapping_add(self.y as u16); let v = bus.read(addr); self.a = self.op_and(self.a, v); 5 }
             0x37 => { let dp = self.read_pc(bus); let addr = bus.read(self.dp(dp)) as u16 | ((bus.read(self.dp(dp.wrapping_add(1))) as u16) << 8); let v = bus.read(addr.wrapping_add(self.y as u16)); self.a = self.op_and(self.a, v); 6 }
-            0x29 => { let src = self.read_pc(bus); let dst = self.read_pc(bus); let a = bus.read(self.dp(dst)); let b = bus.read(self.dp(src)); let r = self.op_and(a, b); bus.write(self.dp(dst), r); 6 }
+            0x29 => { let ds = self.read_pc(bus); let dd = self.read_pc(bus); let a = bus.read(self.dp(dd)); let b = bus.read(self.dp(ds)); let r = self.op_and(a, b); bus.write(self.dp(dd), r); 6 }
             0x38 => { let imm = self.read_pc(bus); let dp = self.read_pc(bus); let a = bus.read(self.dp(dp)); let r = self.op_and(a, imm); bus.write(self.dp(dp), r); 5 }
             0x39 => { let a = bus.read(self.dp(self.x)); let b = bus.read(self.dp(self.y)); let r = self.op_and(a, b); bus.write(self.dp(self.x), r); 5 }
 
@@ -232,7 +232,7 @@ impl Spc700 {
             0x55 => { let addr = self.read_pc16(bus).wrapping_add(self.x as u16); let v = bus.read(addr); self.a = self.op_eor(self.a, v); 5 }
             0x56 => { let addr = self.read_pc16(bus).wrapping_add(self.y as u16); let v = bus.read(addr); self.a = self.op_eor(self.a, v); 5 }
             0x57 => { let dp = self.read_pc(bus); let addr = bus.read(self.dp(dp)) as u16 | ((bus.read(self.dp(dp.wrapping_add(1))) as u16) << 8); let v = bus.read(addr.wrapping_add(self.y as u16)); self.a = self.op_eor(self.a, v); 6 }
-            0x49 => { let src = self.read_pc(bus); let dst = self.read_pc(bus); let a = bus.read(self.dp(dst)); let b = bus.read(self.dp(src)); let r = self.op_eor(a, b); bus.write(self.dp(dst), r); 6 }
+            0x49 => { let ds = self.read_pc(bus); let dd = self.read_pc(bus); let a = bus.read(self.dp(dd)); let b = bus.read(self.dp(ds)); let r = self.op_eor(a, b); bus.write(self.dp(dd), r); 6 }
             0x58 => { let imm = self.read_pc(bus); let dp = self.read_pc(bus); let a = bus.read(self.dp(dp)); let r = self.op_eor(a, imm); bus.write(self.dp(dp), r); 5 }
             0x59 => { let a = bus.read(self.dp(self.x)); let b = bus.read(self.dp(self.y)); let r = self.op_eor(a, b); bus.write(self.dp(self.x), r); 5 }
 
@@ -246,7 +246,7 @@ impl Spc700 {
             0x75 => { let addr = self.read_pc16(bus).wrapping_add(self.x as u16); let v = bus.read(addr); self.op_cmp(self.a, v); 5 }
             0x76 => { let addr = self.read_pc16(bus).wrapping_add(self.y as u16); let v = bus.read(addr); self.op_cmp(self.a, v); 5 }
             0x77 => { let dp = self.read_pc(bus); let addr = bus.read(self.dp(dp)) as u16 | ((bus.read(self.dp(dp.wrapping_add(1))) as u16) << 8); let v = bus.read(addr.wrapping_add(self.y as u16)); self.op_cmp(self.a, v); 6 }
-            0x69 => { let src = self.read_pc(bus); let dst = self.read_pc(bus); let a = bus.read(self.dp(dst)); let b = bus.read(self.dp(src)); self.op_cmp(a, b); 6 }
+            0x69 => { let ds = self.read_pc(bus); let dd = self.read_pc(bus); let a = bus.read(self.dp(dd)); let b = bus.read(self.dp(ds)); self.op_cmp(a, b); 6 }
             0x78 => { let imm = self.read_pc(bus); let dp = self.read_pc(bus); let a = bus.read(self.dp(dp)); self.op_cmp(a, imm); 5 }
             0x79 => { let a = bus.read(self.dp(self.x)); let b = bus.read(self.dp(self.y)); self.op_cmp(a, b); 5 }
             // CMP X
@@ -268,7 +268,7 @@ impl Spc700 {
             0x95 => { let addr = self.read_pc16(bus).wrapping_add(self.x as u16); let v = bus.read(addr); self.a = self.op_adc(self.a, v); 5 }
             0x96 => { let addr = self.read_pc16(bus).wrapping_add(self.y as u16); let v = bus.read(addr); self.a = self.op_adc(self.a, v); 5 }
             0x97 => { let dp = self.read_pc(bus); let addr = bus.read(self.dp(dp)) as u16 | ((bus.read(self.dp(dp.wrapping_add(1))) as u16) << 8); let v = bus.read(addr.wrapping_add(self.y as u16)); self.a = self.op_adc(self.a, v); 6 }
-            0x89 => { let src = self.read_pc(bus); let dst = self.read_pc(bus); let a = bus.read(self.dp(dst)); let b = bus.read(self.dp(src)); let r = self.op_adc(a, b); bus.write(self.dp(dst), r); 6 }
+            0x89 => { let ds = self.read_pc(bus); let dd = self.read_pc(bus); let a = bus.read(self.dp(dd)); let b = bus.read(self.dp(ds)); let r = self.op_adc(a, b); bus.write(self.dp(dd), r); 6 }
             0x98 => { let imm = self.read_pc(bus); let dp = self.read_pc(bus); let a = bus.read(self.dp(dp)); let r = self.op_adc(a, imm); bus.write(self.dp(dp), r); 5 }
             0x99 => { let a = bus.read(self.dp(self.x)); let b = bus.read(self.dp(self.y)); let r = self.op_adc(a, b); bus.write(self.dp(self.x), r); 5 }
 
@@ -282,7 +282,7 @@ impl Spc700 {
             0xB5 => { let addr = self.read_pc16(bus).wrapping_add(self.x as u16); let v = bus.read(addr); self.a = self.op_sbc(self.a, v); 5 }
             0xB6 => { let addr = self.read_pc16(bus).wrapping_add(self.y as u16); let v = bus.read(addr); self.a = self.op_sbc(self.a, v); 5 }
             0xB7 => { let dp = self.read_pc(bus); let addr = bus.read(self.dp(dp)) as u16 | ((bus.read(self.dp(dp.wrapping_add(1))) as u16) << 8); let v = bus.read(addr.wrapping_add(self.y as u16)); self.a = self.op_sbc(self.a, v); 6 }
-            0xA9 => { let src = self.read_pc(bus); let dst = self.read_pc(bus); let a = bus.read(self.dp(dst)); let b = bus.read(self.dp(src)); let r = self.op_sbc(a, b); bus.write(self.dp(dst), r); 6 }
+            0xA9 => { let ds = self.read_pc(bus); let dd = self.read_pc(bus); let a = bus.read(self.dp(dd)); let b = bus.read(self.dp(ds)); let r = self.op_sbc(a, b); bus.write(self.dp(dd), r); 6 }
             0xB8 => { let imm = self.read_pc(bus); let dp = self.read_pc(bus); let a = bus.read(self.dp(dp)); let r = self.op_sbc(a, imm); bus.write(self.dp(dp), r); 5 }
             0xB9 => { let a = bus.read(self.dp(self.x)); let b = bus.read(self.dp(self.y)); let r = self.op_sbc(a, b); bus.write(self.dp(self.x), r); 5 }
 

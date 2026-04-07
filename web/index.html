@@ -386,8 +386,8 @@
                         const stereoSamples = Math.min(samples.length >> 1, maxWrite);
                         for (let i = 0; i < stereoSamples; i++) {
                             const idx = ringWrite & (RING_SIZE - 1);
-                            ringL[idx] = samples[i * 2] / 32768;
-                            ringR[idx] = samples[i * 2 + 1] / 32768;
+                            ringL[idx] = Math.max(-1, Math.min(1, samples[i * 2] / 32768 * 8));
+                            ringR[idx] = Math.max(-1, Math.min(1, samples[i * 2 + 1] / 32768 * 8));
                             ringWrite++;
                         }
                     }

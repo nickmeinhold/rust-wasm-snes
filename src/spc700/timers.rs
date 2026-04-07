@@ -14,11 +14,15 @@ pub struct Timer {
     pub counter: u8,
     /// Whether the timer is enabled (CONTROL register bits 0-2).
     pub enabled: bool,
+    /// Debug: total number of times the counter incremented.
+    pub fire_count: u32,
+    /// Debug: total number of counter reads.
+    pub read_count: u32,
 }
 
 impl Timer {
     pub fn new(target: u16) -> Self {
-        Self { target, divider: 0, counter: 0, enabled: false }
+        Self { target, divider: 0, counter: 0, enabled: false, fire_count: 0, read_count: 0 }
     }
 
     /// Advance the timer by one tick at its native rate.
@@ -29,6 +33,7 @@ impl Timer {
         if self.divider >= self.target {
             self.divider = 0;
             self.counter = (self.counter + 1) & 0x0F;
+            self.fire_count += 1;
         }
     }
 
@@ -36,6 +41,7 @@ impl Timer {
     pub fn read_counter(&mut self) -> u8 {
         let val = self.counter;
         self.counter = 0;
+        self.read_count += 1;
         val
     }
 }

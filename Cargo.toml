@@ -24,6 +24,10 @@ features = [
     "Performance",
 ]
 
+[[bin]]
+name = "spc_player"
+path = "src/bin/spc_player.rs"
+
 [profile.release]
 opt-level = 3
 lto = "thin"

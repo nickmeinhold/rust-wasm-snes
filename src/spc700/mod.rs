@@ -141,6 +141,55 @@ impl Apu {
         }
     }
 
+    /// Load state from a parsed SPC file for standalone playback.
+    pub fn load_spc(&mut self, spc: &crate::spc::SpcFile) {
+        // Restore CPU registers.
+        self.cpu.pc = spc.pc;
+        self.cpu.a = spc.a;
+        self.cpu.x = spc.x;
+        self.cpu.y = spc.y;
+        self.cpu.psw = spc.psw;
+        self.cpu.sp = spc.sp;
+        self.cpu.halted = false;
+
+        // Load 64KB RAM.
+        self.bus.ram.copy_from_slice(&*spc.ram);
+
+        // Restore DSP registers (write through the DSP's write() method
+        // so that voice state, echo length, etc. are properly initialized).
+        // Skip ENDX (0x7C) — it's read-only on real hardware; writing clears it.
+        for i in 0..128u8 {
+            if i == 0x7C { continue; }
+            self.bus.dsp.write(i, spc.dsp_regs[i as usize]);
+        }
+
+        // Replay I/O register state from RAM so timers and ports initialize.
+        // The SPC file stores the last-written values at $F0-$FF in the RAM dump,
+        // but raw copy_from_slice doesn't trigger the I/O side effects.
+        let control = spc.ram[0xF1];
+        self.bus.rom_enabled = control & 0x80 != 0;
+        self.bus.timers[0].enabled = control & 0x01 != 0;
+        self.bus.timers[1].enabled = control & 0x02 != 0;
+        self.bus.timers[2].enabled = control & 0x04 != 0;
+
+        // Timer targets ($FA-$FC).
+        let t0 = spc.ram[0xFA];
+        let t1 = spc.ram[0xFB];
+        let t2 = spc.ram[0xFC];
+        self.bus.timers[0].target = if t0 == 0 { 256 } else { t0 as u16 };
+        self.bus.timers[1].target = if t1 == 0 { 256 } else { t1 as u16 };
+        self.bus.timers[2].target = if t2 == 0 { 256 } else { t2 as u16 };
+
+        // DSP address register.
+        self.bus.dsp.addr_reg = spc.ram[0xF2];
+
+        // Reset timing.
+        self.cycles = 0;
+        self.cycle_frac = 0;
+        self.dsp_counter = 0;
+        self.sample_buffer.clear();
+    }
+
     /// Run the APU for the given number of SPC700 cycles.
     pub fn run_cycles(&mut self, target_cycles: u32) {
         let end_cycle = self.cycles + target_cycles as u64;
@@ -166,7 +215,7 @@ impl Apu {
                 self.dsp_counter += 1;
                 if self.dsp_counter >= 32 {
                     self.dsp_counter = 0;
-                    let (left, right) = self.bus.dsp.generate_sample(&self.bus.ram);
+                    let (left, right) = self.bus.dsp.generate_sample(&mut self.bus.ram);
                     self.sample_buffer.push(left);
                     self.sample_buffer.push(right);
                 }
