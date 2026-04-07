@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>SNES — A Link to the Past</title>
+    <title>SNES — Rust/WASM Emulator</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -72,7 +72,7 @@
         <p style="margin-top: 0.5rem; font-size: 0.8rem">or click to browse</p>
         <input type="file" id="rom-input" accept=".smc,.sfc,.zip">
         <div id="rom-picker" style="margin-top: 1rem; display: none">
-            <p style="font-size: 0.8rem; color: #888; margin-bottom: 0.5rem">or pick from the Internet Archive:</p>
+            <p style="font-size: 0.8rem; color: #888; margin-bottom: 0.5rem">or pick from the <a href="https://archive.org/download/MySnesRoms" target="_blank" style="color: #c8a84e">Internet Archive</a>:</p>
             <input type="text" id="rom-search" placeholder="Search 746 SNES ROMs..."
                 style="background: #1a1a1a; color: #eee; border: 1px solid #444; border-radius: 4px;
                        padding: 6px 10px; width: 260px; font-family: inherit; font-size: 0.8rem;">
@@ -161,7 +161,7 @@
                 data = new Uint8Array(await file.arrayBuffer());
             }
 
-            await startEmulator(data);
+            await startEmulator(data, file.name);
         }
 
         // ── Internet Archive ROM picker ─────────────────────
@@ -170,16 +170,46 @@
         let romCatalog = []; // [{name, title, size}]
 
         (async () => {
-            // Try auto-load local ROM first.
-            try {
-                const resp = await fetch('rom/zelda3.smc');
-                if (resp.ok) {
-                    const data = new Uint8Array(await resp.arrayBuffer());
-                    status.textContent = 'Auto-loading ROM...';
-                    await startEmulator(data);
-                    return;
-                }
-            } catch (_) {}
+            // Quick-load via ?rom= query parameter (e.g. ?rom=SuperMarioWorld.smc)
+            const urlRom = new URLSearchParams(location.search).get('rom');
+            if (urlRom) {
+                try {
+                    status.textContent = `Downloading ${urlRom}...`;
+                    const url = ARCHIVE_DL + encodeURIComponent(urlRom);
+                    const resp = await fetch(CORS_PROXY + encodeURIComponent(url));
+                    if (resp.ok) {
+                        const data = new Uint8Array(await resp.arrayBuffer());
+                        if (data.length >= 1024) {
+                            status.textContent = `Loaded ${urlRom}`;
+                            await startEmulator(data, urlRom);
+                            return;
+                        }
+                    }
+                } catch (_) {}
+            }
+
+            // Try auto-load local ROM (skip if ?rom= was requested).
+            if (!urlRom) {
+                try {
+                    const resp = await fetch('rom/zelda3.smc');
+                    if (resp.ok) {
+                        const data = new Uint8Array(await resp.arrayBuffer());
+                        status.textContent = 'Auto-loading ROM...';
+                        // Read ROM title from header (LoROM at 0x7FC0, 21 bytes).
+                        let romTitle = 'SNES Game';
+                        if (data.length > 0x7FD5) {
+                            const raw = data.slice(0x7FC0, 0x7FD5);
+                            const decoded = String.fromCharCode(...raw).trim();
+                            // Only use if it's printable ASCII.
+                            if (/^[\x20-\x7E]+$/.test(decoded) && decoded.length > 0) {
+                                romTitle = decoded;
+                            }
+                        }
+                        await startEmulator(data, romTitle);
+                        return;
+                    }
+                } catch (_) {}
+            }
 
             // Fetch ROM catalog from Internet Archive metadata API.
             try {
@@ -243,7 +273,7 @@
                 const data = new Uint8Array(await resp.arrayBuffer());
                 if (data.length < 1024) throw new Error('Response too small');
                 status.textContent = `Loaded ${filename} (${Math.round(data.length/1024)} KB)`;
-                await startEmulator(data);
+                await startEmulator(data, filename);
             } catch (err) {
                 console.warn('Proxy fetch failed:', err);
                 window.open(url, '_blank');
@@ -255,7 +285,7 @@
 
         // ── Emulator lifecycle ────────────────────────────────
 
-        async function startEmulator(romData) {
+        async function startEmulator(romData, romName) {
             console.log('Initializing WASM...');
             await init();
             console.log('WASM ready. Creating emulator...');
@@ -268,6 +298,11 @@
                 return;
             }
             console.log('Emulator created! Starting game loop...');
+
+            // Update page title with ROM name (#2).
+            const title = (romName || 'Unknown').replace(/\.(smc|sfc)$/i, '');
+            document.title = `SNES — ${title}`;
+            document.querySelector('h1').textContent = title;
 
             // Show canvas, hide drop zone
             dropZone.style.display = 'none';
@@ -367,6 +402,10 @@
                 if (fc % 30n === 0n) {
                     const dbg = emulator.dump_full_state();
                     console.log(dbg);
+                    const dsp = emulator.dump_dsp_voices();
+                    console.log(dsp);
+                    const dspLog = emulator.drain_dsp_debug();
+                    if (dspLog) console.log('DSP LOG:\n' + dspLog);
                     status.textContent = `Frame ${fc}`;
                 }
 
@@ -385,6 +424,8 @@
             canvas.style.display = 'none';
             dropZone.style.display = '';
             status.textContent = '';
+            document.title = 'SNES — Rust/WASM Emulator';
+            document.querySelector('h1').textContent = 'SNES — Rust/WASM Emulator';
             ringWrite = 0; ringRead = 0;
         }
 

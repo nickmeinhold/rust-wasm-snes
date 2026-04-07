@@ -107,17 +107,33 @@ impl Emulator {
             // Tell the PPU which scanline we're on (for V-counter latching).
             self.bus.ppu.scanline = scanline;
 
-            // V/H-count IRQ check — temporarily disabled for debugging.
-            // TODO: re-enable once the mode $14 hang is resolved.
-            // let irq_mode = (self.bus.nmitimen >> 4) & 0x03;
-            // if irq_mode != 0 && !self.bus.irq_flag { ... }
+            // V/H-count IRQ: fires once when position matches, cleared by $4211 read.
+            let irq_mode = (self.bus.nmitimen >> 4) & 0x03;
+            if irq_mode != 0 && !self.bus.irq_flag {
+                let fire = match irq_mode {
+                    1 => true, // H-count: fire once per scanline (H position approximated)
+                    2 => scanline == self.bus.vtime, // V-count: fire when scanline matches
+                    3 => scanline == self.bus.vtime, // V+H: fire when V matches (H approximated)
+                    _ => false,
+                };
+                if fire {
+                    self.bus.irq_flag = true;
+                    self.cpu.irq_pending = true;
+                }
+            }
 
             // Run CPU and APU in lockstep. The APU must keep up with the CPU
             // so that port reads/writes see timely responses — otherwise the
             // boot handshake deadlocks (CPU polls for a response the APU
             // hasn't had cycles to produce yet).
+            // HBlank occurs during the last ~68 master cycles of each scanline.
             let target = self.cpu.cycles + MASTER_CYCLES_PER_SCANLINE;
+            let hblank_start = self.cpu.cycles + MASTER_CYCLES_PER_SCANLINE - 68 * 4;
+            self.bus.hblank = false;
             while self.cpu.cycles < target {
+                if !self.bus.hblank && self.cpu.cycles >= hblank_start {
+                    self.bus.hblank = true;
+                }
                 let elapsed = self.cpu.step(&mut self.bus);
                 self.cpu.cycles += elapsed;
 
@@ -283,6 +299,18 @@ impl Emulator {
     /// Returns interleaved stereo i16 samples (L, R, L, R, ...) at 32 kHz.
     pub fn get_audio_samples(&mut self) -> Vec<i16> {
         self.bus.apu.drain_samples()
+    }
+
+    /// Dump DSP voice state for audio debugging.
+    pub fn dump_dsp_voices(&self) -> String {
+        self.bus.apu.bus.dsp.dump_voices()
+    }
+
+    /// Drain DSP debug log entries.
+    pub fn drain_dsp_debug(&mut self) -> String {
+        let log = self.bus.apu.bus.dsp.debug_log.join("\n");
+        self.bus.apu.bus.dsp.debug_log.clear();
+        log
     }
 
     /// Enable/disable CPU trace logging.
