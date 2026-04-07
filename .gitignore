@@ -1,5 +1,7 @@
 /target
 /pkg
+web/pkg
+reference/
 rom/
 *.smc
 *.sfc
