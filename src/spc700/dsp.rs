@@ -291,11 +291,11 @@ impl Dsp {
             }
         }
 
-        // Noise LFSR.
+        // Noise LFSR (right-shifting, matching blargg's snes_spc).
         let noise_rate = (self.regs[FLG as usize] & 0x1F) as usize;
-        if noise_rate > 0 && self.rate_fires(noise_rate) {
-            let bit = (self.noise as i32 >> 13) ^ (self.noise as i32 >> 14);
-            self.noise = (((self.noise as i32) << 1) | (bit & 1)) as i16;
+        if self.rate_fires(noise_rate) {
+            let feedback = ((self.noise as i32) << 13) ^ ((self.noise as i32) << 14);
+            self.noise = ((feedback & 0x4000) ^ ((self.noise as i32) >> 1)) as i16;
         }
 
         let noise_enabled = self.regs[0x3D];
@@ -425,8 +425,10 @@ impl Dsp {
                     if fires(rate) {
                         v.env_level -= 1;
                         v.env_level -= v.env_level >> 8;
-                        let sustain = ((v.adsr2 >> 5) as i32 + 1) * 0x100;
-                        if v.env_level <= sustain { v.env_phase = EnvPhase::Sustain; }
+                        // Sustain check: transition when top bits match (blargg: env>>8 == SL)
+                        if (v.env_level >> 8) == (v.adsr2 >> 5) as i32 {
+                            v.env_phase = EnvPhase::Sustain;
+                        }
                     }
                 }
                 EnvPhase::Sustain => {
@@ -480,7 +482,7 @@ impl Dsp {
         let mut fir_r: i32 = 0;
         for tap in 0..8 {
             let coeff = self.regs[tap * 0x10 + FIR_BASE as usize] as i8 as i32;
-            let idx = (hp + 8 - tap) & 7;
+            let idx = (hp + 1 + tap) & 7; // tap 0 = oldest, tap 7 = newest (blargg order)
             fir_l += (self.echo_hist_l[idx] * coeff) >> 6;
             fir_r += (self.echo_hist_r[idx] * coeff) >> 6;
         }

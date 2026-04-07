@@ -321,43 +321,45 @@
             let audioCtx = null;
             let audioStarted = false;
 
-            function initAudio() {
-                if (audioStarted) return;
-                audioStarted = true;
-                try {
-                    audioCtx = new (window.AudioContext || window.webkitAudioContext)({
-                        sampleRate: 32000
-                    });
-                    const processor = audioCtx.createScriptProcessor(1024, 0, 2);
-                    processor.onaudioprocess = (e) => {
-                        const left = e.outputBuffer.getChannelData(0);
-                        const right = e.outputBuffer.getChannelData(1);
-                        for (let i = 0; i < left.length; i++) {
-                            if (ringRead !== ringWrite) {
-                                left[i] = ringL[ringRead & (RING_SIZE - 1)];
-                                right[i] = ringR[ringRead & (RING_SIZE - 1)];
-                                ringRead++;
-                            } else {
-                                left[i] = 0;
-                                right[i] = 0;
-                            }
+            // Create AudioContext immediately (starts suspended due to autoplay policy).
+            // Samples buffer from the start; audio plays once user interacts.
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: 32000
+                });
+                const processor = audioCtx.createScriptProcessor(1024, 0, 2);
+                processor.onaudioprocess = (e) => {
+                    const left = e.outputBuffer.getChannelData(0);
+                    const right = e.outputBuffer.getChannelData(1);
+                    for (let i = 0; i < left.length; i++) {
+                        if (ringRead !== ringWrite) {
+                            left[i] = ringL[ringRead & (RING_SIZE - 1)];
+                            right[i] = ringR[ringRead & (RING_SIZE - 1)];
+                            ringRead++;
+                        } else {
+                            left[i] = 0;
+                            right[i] = 0;
                         }
-                    };
-                    processor.connect(audioCtx.destination);
-                    console.log('Audio initialized: 32kHz stereo');
-                } catch (err) {
-                    console.warn('Audio init failed:', err);
-                }
+                    }
+                };
+                processor.connect(audioCtx.destination);
+                audioStarted = true;
+                console.log('Audio initialized: 32kHz stereo (suspended until gesture)');
+            } catch (err) {
+                console.warn('Audio init failed:', err);
             }
 
-            // Start audio on first user interaction (browser autoplay policy).
-            const startAudioOnGesture = () => {
-                initAudio();
-                document.removeEventListener('keydown', startAudioOnGesture);
-                document.removeEventListener('click', startAudioOnGesture);
+            // Resume audio context on first user interaction (browser autoplay policy).
+            const resumeAudio = () => {
+                if (audioCtx && audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                    console.log('Audio resumed');
+                }
+                document.removeEventListener('keydown', resumeAudio);
+                document.removeEventListener('click', resumeAudio);
             };
-            document.addEventListener('keydown', startAudioOnGesture);
-            document.addEventListener('click', startAudioOnGesture);
+            document.addEventListener('keydown', resumeAudio);
+            document.addEventListener('click', resumeAudio);
 
             // Start the game loop
             let lastTime = performance.now();
