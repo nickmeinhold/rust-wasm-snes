@@ -14,11 +14,23 @@ pub struct Timer {
     pub counter: u8,
     /// Whether the timer is enabled (CONTROL register bits 0-2).
     pub enabled: bool,
+    /// Total number of times the counter incremented (debug/diagnostics).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fire_count: u32,
+    /// Total number of counter reads (debug/diagnostics).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub read_count: u32,
 }
 
 impl Timer {
     pub fn new(target: u16) -> Self {
-        Self { target, divider: 0, counter: 0, enabled: false }
+        Self {
+            target, divider: 0, counter: 0, enabled: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            fire_count: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            read_count: 0,
+        }
     }
 
     /// Advance the timer by one tick at its native rate.
@@ -29,6 +41,8 @@ impl Timer {
         if self.divider >= self.target {
             self.divider = 0;
             self.counter = (self.counter + 1) & 0x0F;
+            #[cfg(not(target_arch = "wasm32"))]
+            { self.fire_count += 1; }
         }
     }
 
@@ -36,6 +50,8 @@ impl Timer {
     pub fn read_counter(&mut self) -> u8 {
         let val = self.counter;
         self.counter = 0;
+        #[cfg(not(target_arch = "wasm32"))]
+        { self.read_count += 1; }
         val
     }
 }

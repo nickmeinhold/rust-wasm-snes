@@ -16,31 +16,31 @@ const GAUSS: [i16; 512] = [
       11,  11,  11,  12,  12,  13,  13,  14,  14,  15,  15,  15,  16,  16,  17,  17,
       18,  19,  19,  20,  20,  21,  21,  22,  23,  23,  24,  24,  25,  26,  27,  27,
       28,  29,  29,  30,  31,  32,  32,  33,  34,  35,  36,  36,  37,  38,  39,  40,
-      41,  42,  43,  44,  45,  46,  47,  48,  50,  51,  53,  54,  56,  57,  59,  60,
-      61,  63,  64,  66,  68,  70,  71,  73,  75,  76,  78,  80,  82,  84,  86,  89,
-      91,  93,  96,  98, 100, 102, 104, 106, 109, 111, 113, 115, 118, 120, 122, 124,
-     126, 128, 130, 132, 134, 137, 139, 141, 143, 145, 147, 150, 152, 154, 156, 159,
-     161, 163, 166, 168, 171, 173, 175, 178, 180, 183, 186, 188, 191, 193, 196, 199,
-     201, 204, 207, 210, 212, 215, 218, 221, 224, 227, 230, 233, 236, 239, 242, 245,
-     248, 251, 254, 257, 260, 263, 267, 270, 273, 276, 280, 283, 286, 290, 293, 297,
-     300, 304, 307, 311, 314, 318, 321, 325, 328, 332, 336, 339, 343, 347, 351, 354,
-     358, 362, 366, 370, 374, 378, 381, 385, 389, 393, 397, 401, 405, 410, 414, 418,
-     422, 426, 430, 434, 439, 443, 447, 451, 456, 460, 464, 469, 473, 477, 482, 486,
-     491, 495, 499, 504, 508, 513, 517, 522, 527, 531, 536, 540, 545, 550, 554, 559,
-     563, 568, 573, 577, 582, 587, 592, 596, 601, 606, 611, 615, 620, 625, 630, 635,
-     640, 644, 649, 654, 659, 664, 669, 674, 678, 683, 688, 693, 698, 703, 708, 713,
-     718, 723, 728, 732, 737, 742, 747, 752, 757, 762, 767, 772, 777, 782, 787, 792,
-     797, 802, 806, 811, 816, 821, 826, 831, 836, 841, 846, 851, 855, 860, 865, 870,
-     875, 880, 884, 889, 894, 899, 904, 908, 913, 918, 923, 927, 932, 937, 941, 946,
-     951, 955, 960, 965, 969, 974, 978, 983, 988, 992, 997,1001,1005,1010,1014,1019,
-    1023,1027,1032,1036,1040,1045,1049,1053,1057,1061,1066,1070,1074,1078,1082,1086,
-    1090,1094,1098,1102,1106,1109,1113,1117,1121,1125,1128,1132,1136,1139,1143,1146,
-    1150,1153,1157,1160,1164,1167,1170,1174,1177,1180,1183,1186,1190,1193,1196,1199,
-    1202,1205,1207,1210,1213,1216,1219,1221,1224,1227,1229,1232,1234,1237,1239,1241,
-    1244,1246,1248,1251,1253,1255,1257,1259,1261,1263,1265,1267,1269,1270,1272,1274,
-    1275,1277,1279,1280,1282,1283,1284,1286,1287,1288,1290,1291,1292,1293,1294,1295,
-    1296,1297,1297,1298,1299,1300,1300,1301,1302,1302,1303,1303,1303,1304,1304,1304,
-    1304,1304,1305,1305,1305,1305,1305,1305,1305,1305,1305,1305,1305,1305,1305,1305,
+      41,  42,  43,  44,  45,  46,  47,  48,  49,  50,  51,  52,  53,  54,  55,  56,
+      58,  59,  60,  61,  62,  64,  65,  66,  67,  69,  70,  71,  73,  74,  76,  77,
+      78,  80,  81,  83,  84,  86,  87,  89,  90,  92,  94,  95,  97,  99, 100, 102,
+     104, 106, 107, 109, 111, 113, 115, 117, 118, 120, 122, 124, 126, 128, 130, 132,
+     134, 137, 139, 141, 143, 145, 147, 150, 152, 154, 156, 159, 161, 163, 166, 168,
+     171, 173, 175, 178, 180, 183, 186, 188, 191, 193, 196, 199, 201, 204, 207, 210,
+     212, 215, 218, 221, 224, 227, 230, 233, 236, 239, 242, 245, 248, 251, 254, 257,
+     260, 263, 267, 270, 273, 276, 280, 283, 286, 290, 293, 297, 300, 304, 307, 311,
+     314, 318, 321, 325, 328, 332, 336, 339, 343, 347, 351, 354, 358, 362, 366, 370,
+     374, 378, 381, 385, 389, 393, 397, 401, 405, 410, 414, 418, 422, 426, 430, 434,
+     439, 443, 447, 451, 456, 460, 464, 469, 473, 477, 482, 486, 491, 495, 499, 504,
+     508, 513, 517, 522, 527, 531, 536, 540, 545, 550, 554, 559, 563, 568, 573, 577,
+     582, 587, 592, 596, 601, 606, 611, 615, 620, 625, 630, 635, 640, 644, 649, 654,
+     659, 664, 669, 674, 678, 683, 688, 693, 698, 703, 708, 713, 718, 723, 728, 732,
+     737, 742, 747, 752, 757, 762, 767, 772, 777, 782, 787, 792, 797, 802, 806, 811,
+     816, 821, 826, 831, 836, 841, 846, 851, 855, 860, 865, 870, 875, 880, 884, 889,
+     894, 899, 904, 908, 913, 918, 923, 927, 932, 937, 941, 946, 951, 955, 960, 965,
+     969, 974, 978, 983, 988, 992, 997,1001,1005,1010,1014,1019,1023,1027,1032,1036,
+    1040,1045,1049,1053,1057,1061,1066,1070,1074,1078,1082,1086,1090,1094,1098,1102,
+    1106,1109,1113,1117,1121,1125,1128,1132,1136,1139,1143,1146,1150,1153,1157,1160,
+    1164,1167,1170,1174,1177,1180,1183,1186,1190,1193,1196,1199,1202,1205,1207,1210,
+    1213,1216,1219,1221,1224,1227,1229,1232,1234,1237,1239,1241,1244,1246,1248,1251,
+    1253,1255,1257,1259,1261,1263,1265,1267,1269,1270,1272,1274,1275,1277,1279,1280,
+    1282,1283,1284,1286,1287,1288,1290,1291,1292,1293,1294,1295,1296,1297,1297,1298,
+    1299,1300,1300,1301,1302,1302,1303,1303,1303,1304,1304,1304,1304,1304,1305,1305,
 ];
 
 // ─── Envelope rate periods (global counter system from blargg) ──────
@@ -106,6 +106,11 @@ struct Voice {
     brr_buf_pos: usize,
     brr_addr: u16,
     brr_header: u8,
+    /// Byte offset within current BRR block (1..8, advances by 2 per 4-sample group).
+    brr_offset: u8,
+
+    /// KON delay counter (counts down from 5 to 0, pre-fills ring buffer).
+    kon_delay: u8,
 
     /// Pitch interpolation position (bits 15-12: sample index, 11-0: fraction).
     interp_pos: i32,
@@ -118,6 +123,7 @@ impl Default for Voice {
             adsr1: 0, adsr2: 0, gain: 0,
             env_level: 0, hidden_env: 0, env_phase: EnvPhase::Off,
             brr_buf: [0; 12], brr_buf_pos: 0, brr_addr: 0, brr_header: 0,
+            brr_offset: 1, kon_delay: 0,
             interp_pos: 0,
         }
     }
@@ -135,9 +141,14 @@ pub struct Dsp {
     echo_hist_pos: usize,
     noise: i16,
     new_kon: u8,
+    pub kon_write_count: u32,
+    pub kon_nonzero_count: u32,
+    pub debug_log: Vec<String>,
 }
 
 impl Dsp {
+    pub fn dump_voices(&self) -> String { String::new() }
+
     pub fn new() -> Self {
         Self {
             regs: [0; 128],
@@ -151,6 +162,9 @@ impl Dsp {
             echo_hist_pos: 0,
             noise: -(1 << 14),
             new_kon: 0,
+            kon_write_count: 0,
+            kon_nonzero_count: 0,
+            debug_log: Vec::new(),
         }
     }
 
@@ -188,7 +202,14 @@ impl Dsp {
         }
 
         match addr {
-            KON => { self.new_kon = val; }
+            KON => {
+                // KON is a strobe register: music drivers write non-zero then
+                // immediately clear with 0. Bits must be OR'd (latched) until
+                // the DSP processes them, otherwise the clear overwrites the set.
+                self.new_kon |= val;
+                self.kon_write_count += 1;
+                if val != 0 { self.kon_nonzero_count += 1; }
+            }
             KOFF => {
                 for i in 0..8 { if val & (1 << i) != 0 { self.voices[i].env_phase = EnvPhase::Release; } }
             }
@@ -206,21 +227,29 @@ impl Dsp {
         (self.global_counter.wrapping_add(COUNTER_OFFSETS[rate] as u32)) % period == 0
     }
 
-    /// Decode one BRR block (16 samples) into the voice's ring buffer.
-    /// Uses blargg's half-precision scheme with clamp-then-double.
-    fn decode_brr(ram: &[u8; 65536], v: &mut Voice) {
+    /// Decode 4 BRR samples from the current offset within the BRR block.
+    ///
+    /// blargg's DSP decodes 4 samples at a time (one nybble group = 2 bytes).
+    /// The 12-entry ring buffer holds exactly 3 groups: the current interpolation
+    /// window plus 2 groups of filter history. Decoding all 16 at once would
+    /// overwrite the first 4 entries, corrupting the buffer.
+    fn decode_brr_group(ram: &[u8; 65536], v: &mut Voice) {
         let addr = v.brr_addr as usize;
         let header = ram[addr & 0xFFFF];
         v.brr_header = header;
         let shift = (header >> 4) & 0x0F;
         let filter = (header >> 2) & 0x03;
 
-        for i in 0..16usize {
-            let byte = ram[(addr + 1 + i / 2) & 0xFFFF];
+        // Decode 4 samples from 2 bytes at current brr_offset.
+        let byte_offset = v.brr_offset as usize;
+        for i in 0..4usize {
+            let byte = ram[(addr + byte_offset + i / 2) & 0xFFFF];
             let nibble = if i & 1 == 0 { byte >> 4 } else { byte & 0x0F };
 
+            // Sign-extend nibble to i32.
             let mut s = (((nibble as i8) << 4) >> 4) as i32;
 
+            // Apply shift (blargg's half-precision: shift then >>1).
             s = if shift <= 12 {
                 (s << shift) >> 1
             } else if s < 0 {
@@ -229,6 +258,7 @@ impl Dsp {
                 0
             };
 
+            // IIR filter using previous 2 decoded samples from ring buffer.
             let p1_idx = (v.brr_buf_pos + 12 - 1) % 12;
             let p2_idx = (v.brr_buf_pos + 12 - 2) % 12;
             let p1 = v.brr_buf[p1_idx];
@@ -260,50 +290,105 @@ impl Dsp {
             v.brr_buf[v.brr_buf_pos] = s;
             v.brr_buf_pos = (v.brr_buf_pos + 1) % 12;
         }
+
+        // Advance to next 4-sample group within this BRR block.
+        v.brr_offset += 2;
+    }
+
+    /// Advance to the next BRR block for a voice, handling end/loop flags.
+    /// Returns false if the voice was keyed off (end without loop).
+    fn advance_brr_block(regs: &mut [u8; 128], ram: &[u8; 65536], v: &mut Voice, voice_idx: u8) -> bool {
+        let dir_base = (regs[DIR as usize] as u16) << 8;
+        let is_end = v.brr_header & 0x01 != 0;
+        let is_loop = v.brr_header & 0x02 != 0;
+        if is_end {
+            regs[ENDX as usize] |= 1 << voice_idx;
+            if is_loop {
+                let dir_entry = dir_base.wrapping_add((v.srcn as u16) * 4);
+                v.brr_addr = ram[(dir_entry + 2) as usize] as u16
+                    | ((ram[(dir_entry + 3) as usize] as u16) << 8);
+            } else {
+                v.env_phase = EnvPhase::Off;
+                v.env_level = 0;
+                return false;
+            }
+        } else {
+            v.brr_addr = v.brr_addr.wrapping_add(9);
+        }
+        v.brr_offset = 1;
+        true
     }
 
     /// Generate one stereo sample pair (called at 32 kHz).
-    pub fn generate_sample(&mut self, ram: &[u8; 65536]) -> (i16, i16) {
+    pub fn generate_sample(&mut self, ram: &mut [u8; 65536]) -> (i16, i16) {
         let dir_base = (self.regs[DIR as usize] as u16) << 8;
         let mute = self.regs[FLG as usize] & 0x40 != 0;
 
-        // Process KON.
+        // ── Process KON (start 5-sample delay pipeline) ─────
         let kon = self.new_kon;
         self.new_kon = 0;
         for i in 0..8u8 {
             if kon & (1 << i) != 0 {
                 let v = &mut self.voices[i as usize];
+                v.kon_delay = 5;
                 v.env_phase = EnvPhase::Attack;
                 v.env_level = 0;
                 v.hidden_env = 0;
-                v.interp_pos = 0;
-                v.brr_buf = [0; 12];
-                v.brr_buf_pos = 0;
-                let dir_entry = dir_base.wrapping_add((v.srcn as u16) * 4);
-                v.brr_addr = ram[dir_entry as usize] as u16
-                    | ((ram[dir_entry.wrapping_add(1) as usize] as u16) << 8);
-                Self::decode_brr(ram, v);
                 self.regs[ENDX as usize] &= !(1 << i);
             }
         }
 
-        // Noise LFSR.
+        // Noise LFSR (right-shifting, matching blargg's snes_spc).
         let noise_rate = (self.regs[FLG as usize] & 0x1F) as usize;
-        if noise_rate > 0 && self.rate_fires(noise_rate) {
-            let bit = (self.noise as i32 >> 13) ^ (self.noise as i32 >> 14);
-            self.noise = (((self.noise as i32) << 1) | (bit & 1)) as i16;
+        if self.rate_fires(noise_rate) {
+            let feedback = ((self.noise as i32) << 13) ^ ((self.noise as i32) << 14);
+            self.noise = ((feedback & 0x4000) ^ ((self.noise as i32) >> 1)) as i16;
         }
 
         let noise_enabled = self.regs[0x3D];
+        let pmon_enabled = self.regs[0x2D];
         let echo_on = self.regs[EON as usize];
 
         let mut main_l: i32 = 0;
         let mut main_r: i32 = 0;
         let mut echo_l: i32 = 0;
         let mut echo_r: i32 = 0;
+        let mut prev_voice_output: i32 = 0;
 
         for i in 0..8u8 {
             let v = &mut self.voices[i as usize];
+
+            // ── KON delay pipeline (5-sample startup) ───────
+            if v.kon_delay > 0 {
+                if v.kon_delay == 5 {
+                    // First tick: set up BRR address, reset buffer.
+                    v.brr_buf = [0; 12];
+                    v.brr_buf_pos = 0;
+                    let dir_entry = dir_base.wrapping_add((v.srcn as u16) * 4);
+                    v.brr_addr = ram[dir_entry as usize] as u16
+                        | ((ram[dir_entry.wrapping_add(1) as usize] as u16) << 8);
+                    v.brr_offset = 1;
+                    v.brr_header = 0; // Ignored on first sample.
+                }
+                v.env_level = 0;
+                v.hidden_env = 0;
+                v.interp_pos = 0;
+                v.kon_delay -= 1;
+                // Trigger BRR decode on ticks 3, 2, 1 (fills 12-entry buffer).
+                if v.kon_delay & 3 != 0 {
+                    v.interp_pos = 0x4000;
+                }
+                // During KON delay: decode if triggered, but no pitch/output.
+                if v.interp_pos >= 0x4000 {
+                    v.interp_pos -= 0x4000;
+                    if v.brr_offset > 8 {
+                        Self::advance_brr_block(&mut self.regs, ram, v, i);
+                    }
+                    Self::decode_brr_group(ram, v);
+                }
+                continue; // Skip normal voice processing during KON delay.
+            }
+
             if v.env_phase == EnvPhase::Off { continue; }
 
             // ── Interpolated sample ───────────────────────────
@@ -311,15 +396,16 @@ impl Dsp {
                 (self.noise as i32) * 2
             } else {
                 let offset = ((v.interp_pos >> 4) & 0xFF) as usize;
-                let base = ((v.interp_pos >> 12) & 0x03) as usize;
+                let idx = (v.interp_pos >> 12) as usize;
 
-                // Read 4 samples from ring buffer for Gaussian interpolation.
-                let s = |n: usize| -> i32 { v.brr_buf[(v.brr_buf_pos + 12 - 4 + base + n) % 12] };
+                // brr_buf_pos points to the oldest group (next overwrite target).
+                // Interpolation slides forward from there by (interp_pos >> 12).
+                let s = |n: usize| -> i32 { v.brr_buf[(v.brr_buf_pos + idx + n) % 12] };
 
                 let mut out = (GAUSS[255 - offset] as i32 * s(0)) >> 11;
                 out += (GAUSS[511 - offset] as i32 * s(1)) >> 11;
                 out += (GAUSS[256 + offset] as i32 * s(2)) >> 11;
-                out = out as i16 as i32; // 16-bit wrap after 3 terms (hardware bug)
+                out = out as i16 as i32; // 16-bit wrap after 3 terms (matches blargg)
                 out += (GAUSS[offset] as i32 * s(3)) >> 11;
                 clamp16(out) & !1
             };
@@ -338,29 +424,30 @@ impl Dsp {
                 echo_r = clamp16(echo_r + right);
             }
 
-            // ── Advance pitch ─────────────────────────────────
-            v.interp_pos = (v.interp_pos & 0x3FFF) + v.pitch as i32;
+            // Track post-envelope output for PMON (blargg's t_output).
+            prev_voice_output = amp;
+
+            // ── Advance pitch (with optional pitch modulation) ──
+            let mut pitch = v.pitch as i32;
+            // PMON: modulate pitch by previous voice's output (voice 0 can't be modulated).
+            if i > 0 && pmon_enabled & (1 << i) != 0 {
+                pitch += ((pitch * prev_voice_output) >> 15) & !1;
+            }
+            v.interp_pos = (v.interp_pos & 0x3FFF) + pitch;
             if v.interp_pos > 0x7FFF { v.interp_pos = 0x7FFF; }
 
+            // Decode on demand: each 0x4000 step consumes one 4-sample group.
+            // High pitches (>0x4000) can cross multiple groups per sample.
             while v.interp_pos >= 0x4000 {
                 v.interp_pos -= 0x4000;
-                let is_end = v.brr_header & 0x01 != 0;
-                let is_loop = v.brr_header & 0x02 != 0;
-                if is_end {
-                    self.regs[ENDX as usize] |= 1 << i;
-                    if is_loop {
-                        let dir_entry = dir_base.wrapping_add((v.srcn as u16) * 4);
-                        v.brr_addr = ram[(dir_entry + 2) as usize] as u16
-                            | ((ram[(dir_entry + 3) as usize] as u16) << 8);
-                    } else {
-                        v.env_phase = EnvPhase::Off;
-                        v.env_level = 0;
+                // If we've consumed all 4 groups in this block, advance to next.
+                if v.brr_offset > 8 {
+                    if !Self::advance_brr_block(&mut self.regs, ram, v, i) {
+                        // Voice ended (no loop). Skip further processing.
                         break;
                     }
-                } else {
-                    v.brr_addr = v.brr_addr.wrapping_add(9);
                 }
-                Self::decode_brr(ram, v);
+                Self::decode_brr_group(ram, v);
             }
 
             // ── Envelope update ───────────────────────────────
@@ -421,8 +508,10 @@ impl Dsp {
                     if fires(rate) {
                         v.env_level -= 1;
                         v.env_level -= v.env_level >> 8;
-                        let sustain = ((v.adsr2 >> 5) as i32 + 1) * 0x100;
-                        if v.env_level <= sustain { v.env_phase = EnvPhase::Sustain; }
+                        // Sustain check: transition when top bits match (blargg: env>>8 == SL)
+                        if (v.env_level >> 8) == (v.adsr2 >> 5) as i32 {
+                            v.env_phase = EnvPhase::Sustain;
+                        }
                     }
                 }
                 EnvPhase::Sustain => {
@@ -459,7 +548,7 @@ impl Dsp {
         v.env_level = v.env_level.clamp(0, 0x7FF);
     }
 
-    fn process_echo(&mut self, ram: &[u8; 65536], input_l: i16, input_r: i16) -> (i16, i16) {
+    fn process_echo(&mut self, ram: &mut [u8; 65536], input_l: i16, input_r: i16) -> (i16, i16) {
         if self.echo_length == 0 { return (0, 0); }
 
         let esa = (self.regs[ESA as usize] as u16) << 8;
@@ -476,7 +565,7 @@ impl Dsp {
         let mut fir_r: i32 = 0;
         for tap in 0..8 {
             let coeff = self.regs[tap * 0x10 + FIR_BASE as usize] as i8 as i32;
-            let idx = (hp + 8 - tap) & 7;
+            let idx = (hp + 1 + tap) & 7; // tap 0 = oldest, tap 7 = newest (blargg order)
             fir_l += (self.echo_hist_l[idx] * coeff) >> 6;
             fir_r += (self.echo_hist_r[idx] * coeff) >> 6;
         }
@@ -485,12 +574,18 @@ impl Dsp {
 
         self.echo_hist_pos = (hp + 1) & 7;
 
-        // Echo write-back (disabled when FLG bit 5 set).
+        // Echo write-back: mix voice input + FIR feedback, store to echo buffer in RAM.
+        // Disabled when FLG bit 5 (echo write disable) is set.
         if self.regs[FLG as usize] & 0x20 == 0 {
             let efb = self.regs[EFB as usize] as i8 as i32;
-            let _write_l = clamp16(input_l as i32 + ((fir_l * efb) >> 7)) as i16;
-            let _write_r = clamp16(input_r as i32 + ((fir_r * efb) >> 7)) as i16;
-            // TODO: write to APU RAM (needs &mut ram).
+            let write_l = clamp16(input_l as i32 + ((fir_l * efb) >> 7)) as i16;
+            let write_r = clamp16(input_r as i32 + ((fir_r * efb) >> 7)) as i16;
+            let bytes_l = write_l.to_le_bytes();
+            let bytes_r = write_r.to_le_bytes();
+            ram[pos & 0xFFFF] = bytes_l[0];
+            ram[(pos + 1) & 0xFFFF] = bytes_l[1];
+            ram[(pos + 2) & 0xFFFF] = bytes_r[0];
+            ram[(pos + 3) & 0xFFFF] = bytes_r[1];
         }
 
         self.echo_pos += 4;
