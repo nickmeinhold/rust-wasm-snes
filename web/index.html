@@ -285,8 +285,17 @@
 
         // ── Emulator lifecycle ────────────────────────────────
 
+        let loopGeneration = 0;
+        let startingEmulator = false;
         async function startEmulator(romData, romName) {
-            console.log('Initializing WASM...');
+            // Prevent concurrent starts (multiple event paths can trigger this).
+            if (startingEmulator) return;
+            startingEmulator = true;
+
+            // Invalidate any existing game loop — it will check this and stop.
+            loopGeneration++;
+            if (animFrameId) { cancelAnimationFrame(animFrameId); animFrameId = null; }
+
             await init();
             console.log('WASM ready. Creating emulator...');
 
@@ -354,7 +363,9 @@
             const resumeAudio = () => {
                 if (audioCtx && audioCtx.state === 'suspended') {
                     audioCtx.resume();
-                    console.log('Audio resumed');
+                    // Flush stale samples that accumulated while audio was suspended.
+                    ringRead = ringWrite;
+                    console.log('Audio resumed (ring flushed)');
                 }
                 document.removeEventListener('keydown', resumeAudio);
                 document.removeEventListener('click', resumeAudio);
@@ -367,7 +378,11 @@
             let frameAccumulator = 0;
             const FRAME_TIME = 1000 / 60.0988; // NTSC ~60.1 fps
 
+            const myGeneration = loopGeneration;
             function gameLoop(now) {
+                // Stop if a newer game loop has been started.
+                if (loopGeneration !== myGeneration) return;
+
                 frameAccumulator += now - lastTime;
                 lastTime = now;
 
@@ -381,16 +396,21 @@
                     // Always drain audio samples to prevent Rust-side accumulation.
                     const samples = emulator.get_audio_samples();
                     if (audioStarted && samples.length >= 2) {
+                        const stereoSamples = samples.length >> 1;
                         // Write interleaved i16 stereo samples to ring buffer.
-                        const available = (ringWrite - ringRead) >>> 0;
-                        const maxWrite = RING_SIZE - available - 1; // Leave 1 slot gap
-                        const stereoSamples = Math.min(samples.length >> 1, maxWrite);
                         for (let i = 0; i < stereoSamples; i++) {
                             const idx = ringWrite & (RING_SIZE - 1);
                             ringL[idx] = Math.max(-1, Math.min(1, samples[i * 2] / 32768 * AUDIO_GAIN));
                             ringR[idx] = Math.max(-1, Math.min(1, samples[i * 2 + 1] / 32768 * AUDIO_GAIN));
                             ringWrite++;
                         }
+                    }
+
+                    // Cap ring buffer to prevent drift/speedup.
+                    const MAX_BUFFERED = 4096;
+                    const buffered = (ringWrite - ringRead) >>> 0;
+                    if (buffered > MAX_BUFFERED) {
+                        ringRead = ringWrite - MAX_BUFFERED;
                     }
 
                     frameAccumulator -= FRAME_TIME;
@@ -402,13 +422,9 @@
                 }
 
                 const fc = emulator.frame_count();
-                if (fc % 30n === 0n) {
+                if (fc % 300n === 0n) {
                     const dbg = emulator.dump_full_state();
                     console.log(dbg);
-                    const dsp = emulator.dump_dsp_voices();
-                    console.log(dsp);
-                    const dspLog = emulator.drain_dsp_debug();
-                    if (dspLog) console.log('DSP LOG:\n' + dspLog);
                     status.textContent = `Frame ${fc}`;
                 }
 
@@ -416,6 +432,7 @@
             }
 
             animFrameId = requestAnimationFrame(gameLoop);
+            startingEmulator = false;
         }
 
         // ── Back to ROM list ─────────────────────────────────

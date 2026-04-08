@@ -115,6 +115,65 @@ impl ApuBus {
     }
 }
 
+/// Analog output filter — emulates the SNES hardware output stage.
+///
+/// Two-stage per-channel filter matching blargg's SPC_Filter:
+/// 1. Low-pass FIR (two-point, coefficients 0.25/0.75) — smooths the signal
+/// 2. High-pass "leaky integrator" — removes DC offset and bass rumble
+///
+/// This models the actual analog circuitry between the DSP and the output jacks.
+struct OutputFilter {
+    ch: [OutputFilterChan; 2],
+    gain: i32,
+    bass: i32,
+}
+
+#[derive(Clone, Copy, Default)]
+struct OutputFilterChan {
+    p1: i32,
+    pp1: i32,
+    sum: i32,
+}
+
+impl OutputFilter {
+    const GAIN_UNIT: i32 = 0x100;
+    const GAIN_BITS: i32 = 8;
+    const BASS_NORM: i32 = 8;
+
+    fn new() -> Self {
+        Self {
+            ch: [OutputFilterChan::default(); 2],
+            gain: Self::GAIN_UNIT,
+            bass: Self::BASS_NORM,
+        }
+    }
+
+    /// Filter a single stereo sample in place.
+    fn run(&mut self, left: &mut i16, right: &mut i16) {
+        let samples = [left, right];
+        for (c, s) in self.ch.iter_mut().zip(samples) {
+            let input = *s as i32;
+
+            // Low-pass filter (two-point FIR: 0.25 * prev + 0.75 * current)
+            let f = input + c.p1;
+            c.p1 = input * 3;
+
+            // High-pass filter ("leaky integrator")
+            let delta = f - c.pp1;
+            c.pp1 = f;
+            let out = c.sum >> (Self::GAIN_BITS + 2);
+            c.sum += (delta * self.gain) - (c.sum >> self.bass);
+
+            // Clamp to i16
+            *s = if out as i16 as i32 != out {
+                ((out >> 31) ^ 0x7FFF) as i16
+            } else {
+                out as i16
+            };
+        }
+    }
+}
+
 /// Complete APU: SPC700 CPU + bus (RAM/DSP/timers/ports).
 pub struct Apu {
     pub cpu: Spc700,
@@ -123,10 +182,16 @@ pub struct Apu {
     pub cycles: u64,
     /// Fractional cycle accumulator for precise main→SPC timing.
     pub cycle_frac: u32,
+    /// Cycle debt: positive = SPC needs to run, negative = SPC ran ahead.
+    /// This prevents overshoot amplification when catch_up is called frequently
+    /// with small cycle counts.
+    cycle_debt: i64,
     /// DSP sample counter (one stereo sample per 32 SPC cycles).
     dsp_counter: u32,
     /// Audio output buffer (interleaved stereo i16: L, R, L, R, ...).
     pub sample_buffer: Vec<i16>,
+    /// Analog output filter (models SNES hardware output stage).
+    output_filter: OutputFilter,
 }
 
 impl Apu {
@@ -136,8 +201,10 @@ impl Apu {
             bus: ApuBus::new(),
             cycles: 0,
             cycle_frac: 0,
+            cycle_debt: 0,
             dsp_counter: 0,
             sample_buffer: Vec::with_capacity(2048),
+            output_filter: OutputFilter::new(),
         }
     }
 
@@ -183,23 +250,46 @@ impl Apu {
         // DSP address register.
         self.bus.dsp.addr_reg = spc.ram[0xF2];
 
-        // Reset timing.
+        // Clear echo buffer — SPC files have garbage in the echo region.
+        // Matches blargg's spc_clear_echo(): fill with 0xFF if echo is enabled.
+        let flg = self.bus.dsp.regs[0x6C];
+        if flg & 0x20 == 0 { // Echo write not disabled
+            let esa = self.bus.dsp.regs[0x6D] as usize;
+            let edl = (self.bus.dsp.regs[0x7D] & 0x0F) as usize;
+            let addr = esa * 0x100;
+            let end = (addr + edl * 0x800).min(0x10000);
+            if end > addr {
+                self.bus.ram[addr..end].fill(0xFF);
+            }
+        }
+
+        // Reset timing and filter state.
         self.cycles = 0;
         self.cycle_frac = 0;
+        self.cycle_debt = 0;
         self.dsp_counter = 0;
         self.sample_buffer.clear();
+        self.output_filter = OutputFilter::new();
     }
 
     /// Run the APU for the given number of SPC700 cycles.
+    ///
+    /// Uses a cycle-debt approach: the debt accumulates requested cycles,
+    /// and instructions that overshoot drive the debt negative. This prevents
+    /// the ~4x amplification bug where frequent small calls (e.g., 1 SPC cycle)
+    /// each run a full instruction (4+ cycles) without compensating for overshoot.
     pub fn run_cycles(&mut self, target_cycles: u32) {
-        let end_cycle = self.cycles + target_cycles as u64;
-        while self.cycles < end_cycle {
+        self.cycle_debt += target_cycles as i64;
+
+        while self.cycle_debt > 0 {
             // Execute one SPC700 instruction (each takes multiple cycles).
             let inst_cycles = if !self.cpu.halted {
-                self.cpu.step(&mut self.bus) as u64
+                self.cpu.step(&mut self.bus) as i64
             } else {
                 1 // Advance time even when halted
             };
+
+            self.cycle_debt -= inst_cycles;
 
             // Tick timers and DSP for each cycle consumed by this instruction.
             for _ in 0..inst_cycles {
@@ -215,7 +305,8 @@ impl Apu {
                 self.dsp_counter += 1;
                 if self.dsp_counter >= 32 {
                     self.dsp_counter = 0;
-                    let (left, right) = self.bus.dsp.generate_sample(&mut self.bus.ram);
+                    let (mut left, mut right) = self.bus.dsp.generate_sample(&mut self.bus.ram);
+                    self.output_filter.run(&mut left, &mut right);
                     self.sample_buffer.push(left);
                     self.sample_buffer.push(right);
                 }
