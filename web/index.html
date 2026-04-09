@@ -101,6 +101,12 @@
         window._emu = () => emulator; // Expose for console debugging
         let animFrameId = null;
 
+        // Audio state — module-scoped so stopEmulator() can clean up.
+        let audioCtx = null;
+        let audioStarted = false;
+        let ringWrite = 0;
+        let ringRead = 0;
+
         const canvas = document.getElementById('screen');
         const ctx = canvas.getContext('2d');
         const status = document.getElementById('status');
@@ -326,11 +332,12 @@
             const AUDIO_GAIN = 4; // Amplify DSP output (peak ~15% after CPU fixes)
             const ringL = new Float32Array(RING_SIZE);
             const ringR = new Float32Array(RING_SIZE);
-            let ringWrite = 0;
-            let ringRead = 0;
+            ringWrite = 0;
+            ringRead = 0;
 
-            let audioCtx = null;
-            let audioStarted = false;
+            if (audioCtx) { audioCtx.close(); }
+            audioCtx = null;
+            audioStarted = false;
 
             // Create AudioContext immediately (starts suspended due to autoplay policy).
             // Samples buffer from the start; audio plays once user interacts.
