@@ -98,6 +98,7 @@
         import init, { Emulator } from './pkg/zelda_a_link_to_the_past.js';
 
         let emulator = null;
+        window._emu = () => emulator; // Expose for console debugging
         let animFrameId = null;
 
         const canvas = document.getElementById('screen');

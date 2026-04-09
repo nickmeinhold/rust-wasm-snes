@@ -42,6 +42,10 @@ pub struct Ppu {
     pub vram_remap: u8,        // Address remapping mode from VMAIN
 
     // ── CGRAM access ─────���─────────────────────────────
+    /// Debug counter for VRAM writes.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub vram_write_count: u64,
+
     pub cgram_addr: u8,        // $2121
     pub cgram_latch: u8,       // Write latch (low byte)
     pub cgram_flipflop: bool,
@@ -124,6 +128,8 @@ impl Ppu {
             vram_prefetch: 0,
             vram_remap: 0,
 
+            #[cfg(not(target_arch = "wasm32"))]
+            vram_write_count: 0,
             cgram_addr: 0,
             cgram_latch: 0,
             cgram_flipflop: false,
@@ -252,6 +258,11 @@ impl Ppu {
                 }
             }
             0x2105 => { // BGMODE
+                #[cfg(feature = "vram-trace")]
+                if val != self.bgmode {
+                    eprintln!("  BGMODE: {:02X} -> {:02X} (bg3hi: {} -> {})",
+                        self.bgmode, val, (self.bgmode >> 3) & 1, (val >> 3) & 1);
+                }
                 self.bgmode = val;
                 self.bg[0].tile_size = val & 0x10 != 0;
                 self.bg[1].tile_size = val & 0x20 != 0;
@@ -360,13 +371,8 @@ impl Ppu {
                 self.m7_latch = val;
             }
             0x2115 => { // VMAIN
-                self.vram_increment = val & 0x03;
+                self.vram_increment = (val & 0x03) | (val & 0x80);
                 self.vram_remap = (val >> 2) & 0x03;
-                // Bit 7: increment after high byte (1) or low byte (0)
-                // Stored in bit 7 of vram_increment for convenience
-                if val & 0x80 != 0 {
-                    self.vram_increment |= 0x80;
-                }
             }
             0x2116 => { // VMADDL
                 self.vram_addr = (self.vram_addr & 0xFF00) | val as u16;
@@ -390,6 +396,22 @@ impl Ppu {
             0x2118 => { // VMDATAL — write low byte
                 let translated = self.translate_vram_addr(self.vram_addr);
                 let byte_addr = (translated as usize) * 2;
+                #[cfg(feature = "vram-trace")]
+                {
+                    // Log writes to BG3 chr region (word 0x4000-0x4FFF) — just count them
+                    if translated >= 0x4000 && translated < 0x5000 && val != 0 {
+                        static VRAM_CHR_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                        let c = VRAM_CHR_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if c < 10 || c % 1000 == 0 {
+                            eprintln!("  BG3_CHR_LO #{} word={:04X} val={:02X} vmain={:02X} scan={}",
+                                c, translated, val, self.vram_increment, self.scanline);
+                        }
+                    }
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.vram_write_count += 1;
+                }
                 if byte_addr < self.vram.len() {
                     self.vram[byte_addr] = val;
                 }
@@ -401,6 +423,18 @@ impl Ppu {
             0x2119 => { // VMDATAH — write high byte
                 let translated = self.translate_vram_addr(self.vram_addr);
                 let byte_addr = (translated as usize) * 2 + 1;
+                #[cfg(feature = "vram-trace")]
+                {
+                    // Log writes to BG3 chr region high bytes
+                    if translated >= 0x4000 && translated < 0x5000 && val != 0 {
+                        static VRAM_CHRH_COUNT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+                        let c = VRAM_CHRH_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if c < 10 || c % 1000 == 0 {
+                            eprintln!("  BG3_CHR_HI #{} word={:04X} val={:02X} vmain={:02X} scan={}",
+                                c, translated, val, self.vram_increment, self.scanline);
+                        }
+                    }
+                }
                 if byte_addr < self.vram.len() {
                     self.vram[byte_addr] = val;
                 }

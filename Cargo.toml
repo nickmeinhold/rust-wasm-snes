@@ -28,8 +28,14 @@ features = [
 name = "spc_player"
 path = "src/bin/spc_player.rs"
 
+[[bin]]
+name = "debug_tm"
+path = "src/bin/debug_tm.rs"
+
 [features]
 trace = []
+vram-trace = []
+cpu-trace = []
 
 [profile.release]
 opt-level = 3

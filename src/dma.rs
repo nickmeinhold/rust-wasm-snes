@@ -72,6 +72,12 @@ impl Dma {
         let reg = addr & 0x0F;
         let c = &mut self.channels[ch];
 
+        #[cfg(feature = "vram-trace")]
+        if ch == 1 && reg <= 6 {
+            eprintln!("  DMA_REG ch1 reg={} val={:02X} (ctrl={:02X} dest={:02X} src={:02X}:{:04X} size={:04X})",
+                reg, val, c.control, c.dest, c.src_bank, c.src_addr, c.size);
+        }
+
         match reg {
             0x0 => c.control = val,
             0x1 => c.dest = val,
