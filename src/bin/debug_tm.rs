@@ -3,6 +3,7 @@
 ///
 /// Usage: cargo run --bin debug_tm -- rom/smw.smc [frames]
 
+use std::cell::Cell;
 use std::env;
 use std::fs;
 use std::io::Write;
@@ -41,6 +42,14 @@ fn main() {
     let mut pre_0d9d: u8 = 0;
     let mut pre_3e: u8 = 0;
     let mut last_bg1sc: u8 = 0xFF;
+
+    // Watchpoint/trace state (previously unsafe static mut)
+    let ow_tracing = Cell::new(false);
+    let ow_count = Cell::new(0u32);
+    let last_game_mode = Cell::new(0xFFu8);
+    let m08_tracing = Cell::new(false);
+    let m08_count = Cell::new(0u32);
+    let last_0d7c = Cell::new(0u16);
 
     // Simulate button press for Start at frame 300 (auto-start the game)
     let start_frame = 180;
@@ -123,23 +132,20 @@ fn main() {
                 bus.last_write_pc = pre_pc;
 
                 // Targeted overworld trace: start when mode 07 handler is entered
-                static mut OW_TRACING: bool = false;
-                static mut OW_COUNT: u32 = 0;
-                let ow_tracing = unsafe { OW_TRACING };
-                if !ow_tracing && frame >= 400 && cpu.pc == 0x9C64 && cpu.pbr == 0x00
+                if !ow_tracing.get() && frame >= 400 && cpu.pc == 0x9C64 && cpu.pbr == 0x00
                     && bus.wram[0x0100] == 0x07 {
-                    unsafe { OW_TRACING = true; }
+                    ow_tracing.set(true);
                     eprintln!("=== OVERWORLD TRACE START frame={} ===", frame);
                 }
-                if unsafe { OW_TRACING } && unsafe { OW_COUNT } < 500000 {
+                if ow_tracing.get() && ow_count.get() < 500000 {
                     let op = bus.read(cpu.pbr, cpu.pc);
                     eprintln!("PC:{:02X}:{:04X} OP:{:02X} A:{:04X} X:{:04X} Y:{:04X} SP:{:04X} P:{:02X} DP:{:04X} DB:{:02X} E:{}",
                         cpu.pbr, cpu.pc, op, cpu.a, cpu.x, cpu.y, cpu.sp,
                         cpu.p.to_byte(cpu.emulation), cpu.dp, cpu.dbr,
                         if cpu.emulation { 1 } else { 0 });
-                    unsafe { OW_COUNT += 1; }
-                    if unsafe { OW_COUNT } >= 500000 {
-                        eprintln!("=== OVERWORLD TRACE DONE ({} instructions) ===", unsafe { OW_COUNT });
+                    ow_count.set(ow_count.get() + 1);
+                    if ow_count.get() >= 500000 {
+                        eprintln!("=== OVERWORLD TRACE DONE ({} instructions) ===", ow_count.get());
                     }
                 }
 
@@ -161,31 +167,27 @@ fn main() {
                         frame, bus.wram[0x0100], bus.wram[0], bus.wram[0x3E]);
                 }
                 // Watchpoint: WRAM $0100 (game mode) changes
-                static mut LAST_GAME_MODE: u8 = 0xFF;
                 let cur_mode = bus.wram[0x0100];
-                if cur_mode != unsafe { LAST_GAME_MODE } {
+                if cur_mode != last_game_mode.get() {
                     eprintln!("  GAME_MODE {:02X} -> {:02X} frame={} scan={} PC={:02X}:{:04X}",
-                        unsafe { LAST_GAME_MODE }, cur_mode, frame, scanline, pre_pbr, pre_pc);
-                    unsafe { LAST_GAME_MODE = cur_mode; }
+                        last_game_mode.get(), cur_mode, frame, scanline, pre_pbr, pre_pc);
+                    last_game_mode.set(cur_mode);
                 }
                 // Trace mode 08 handler for one frame
-                static mut M08_TRACING: bool = false;
-                static mut M08_COUNT: u32 = 0;
-                if cpu.pc == 0x9CD1 && cpu.pbr == 0x00 && cur_mode == 0x08 && !unsafe { M08_TRACING } && frame == 365 {
-                    unsafe { M08_TRACING = true; }
+                if cpu.pc == 0x9CD1 && cpu.pbr == 0x00 && cur_mode == 0x08 && !m08_tracing.get() && frame == 365 {
+                    m08_tracing.set(true);
                     eprintln!("  MODE08 buttons: $15={:02X} $16={:02X} $17={:02X} $18={:02X} joy={:04X} $DA2={:02X} $DA4={:02X} $DA0={:02X}",
                         bus.wram[0x15], bus.wram[0x16], bus.wram[0x17], bus.wram[0x18],
                         bus.joypad.current, bus.wram[0x0DA2], bus.wram[0x0DA4], bus.wram[0x0DA0]);
                 }
-                if unsafe { M08_TRACING } && unsafe { M08_COUNT } < 200 {
+                if m08_tracing.get() && m08_count.get() < 200 {
                     let op = bus.read(cpu.pbr, cpu.pc);
                     eprintln!("  M08[{:3}] {:02X}:{:04X} op={:02X} A={:04X} X={:04X} Y={:04X} P={:02X}",
-                        unsafe { M08_COUNT }, cpu.pbr, cpu.pc, op, cpu.a, cpu.x, cpu.y,
+                        m08_count.get(), cpu.pbr, cpu.pc, op, cpu.a, cpu.x, cpu.y,
                         cpu.p.to_byte(cpu.emulation));
-                    unsafe { M08_COUNT += 1; }
-                    // Stop at RTS/RTL or after hitting main loop
-                    if cpu.pc == 0x806B && cpu.pbr == 0x00 && unsafe { M08_COUNT } > 5 {
-                        unsafe { M08_TRACING = false; }
+                    m08_count.set(m08_count.get() + 1);
+                    if cpu.pc == 0x806B && cpu.pbr == 0x00 && m08_count.get() > 5 {
+                        m08_tracing.set(false);
                     }
                 }
                 // Start tracing 30 instructions before we expect to hit 8570
@@ -203,12 +205,10 @@ fn main() {
 
                 // Watchpoint: WRAM $0D7C (16-bit) — the VRAM transfer pointer
                 let cur_0d7c = (bus.wram[0x0D7C] as u16) | ((bus.wram[0x0D7D] as u16) << 8);
-                static mut LAST_0D7C: u16 = 0;
-                let last_0d7c = unsafe { LAST_0D7C };
-                if cur_0d7c != last_0d7c {
+                if cur_0d7c != last_0d7c.get() {
                     eprintln!("Frame {:4} Scan {:3} | $0D7C: {:04X} -> {:04X} | PC={:02X}:{:04X} A={:04X} X={:04X} Y={:04X}",
-                        frame, scanline, last_0d7c, cur_0d7c, pre_pbr, pre_pc, cpu.a, cpu.x, cpu.y);
-                    unsafe { LAST_0D7C = cur_0d7c; }
+                        frame, scanline, last_0d7c.get(), cur_0d7c, pre_pbr, pre_pc, cpu.a, cpu.x, cpu.y);
+                    last_0d7c.set(cur_0d7c);
                 }
 
                 // Track BG1SC changes

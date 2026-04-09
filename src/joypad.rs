@@ -51,7 +51,7 @@ impl Joypad {
             // Falling edge: latch buttons and reset counter
             self.latched = self.current;
             self.bit_index = 0;
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(debug_assertions)]
             if self.current != 0 {
                 eprintln!("  JOYPAD strobe: latched {:04X}", self.current);
             }
