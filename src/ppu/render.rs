@@ -822,4 +822,64 @@ impl Ppu {
             0
         }
     }
+
+    /// Probe a specific screen pixel on BG1 — returns full decode chain.
+    pub fn probe_bg_pixel(&self, screen_x: u16, screen_y: u16) -> String {
+        let mode = self.bgmode & 0x07;
+        let bg = &self.bg[0]; // BG1
+        let bpp = if mode == 1 { 4u8 } else { 2 };
+
+        // Scrolled position
+        let sx = screen_x.wrapping_add(bg.hscroll) & 0x3FF;
+        let sy = screen_y.wrapping_add(bg.vscroll) & 0x3FF;
+
+        let map_x = (sx / 8) as u16;
+        let map_y = (sy / 8) as u16;
+        let fine_x = (sx % 8) as u8;
+        let fine_y = (sy % 8) as u8;
+
+        // Screen offset for >32-tile maps
+        let mut screen_offset: u16 = 0;
+        let size_x = bg.tilemap_size & 1 != 0; // bit 0 = wide
+        let size_y = bg.tilemap_size & 2 != 0; // bit 1 = tall
+        if map_x >= 32 && size_x { screen_offset += 0x400; }
+        if map_y >= 32 && size_y { screen_offset += if size_x { 0x800 } else { 0x400 }; }
+        let map_x = map_x & 31;
+        let map_y = map_y & 31;
+
+        let tilemap_entry_addr = bg.tilemap_addr
+            .wrapping_add(screen_offset)
+            .wrapping_add(map_y * 32 + map_x);
+
+        let byte_addr = (tilemap_entry_addr as usize) * 2;
+        let entry = if byte_addr + 1 < self.vram.len() {
+            self.vram[byte_addr] as u16 | ((self.vram[byte_addr + 1] as u16) << 8)
+        } else { 0 };
+
+        let tile_num = entry & 0x03FF;
+        let palette = (entry >> 10) & 0x07;
+        let priority = entry & 0x2000 != 0;
+        let hflip = entry & 0x4000 != 0;
+        let vflip = entry & 0x8000 != 0;
+
+        let fx = if hflip { 7 - fine_x } else { fine_x };
+        let fy = if vflip { 7 - fine_y } else { fine_y };
+        let color_idx = self.decode_tile_pixel(bg.chr_addr, tile_num, bpp, fx, fy);
+
+        let colors_per_pal = 1u16 << bpp;
+        let cgram_idx = palette * colors_per_pal + color_idx as u16;
+        let color = self.read_cgram(cgram_idx);
+        let r = color & 0x1F;
+        let g = (color >> 5) & 0x1F;
+        let b = (color >> 10) & 0x1F;
+
+        format!(
+            "screen({},{}) scroll({},{}) map({},{}) fine({},{}) tmap_addr={:04X} entry={:04X} tile={} pal={} hf={} vf={} pri={} pixel={} cgram_idx={} color={:04X} R={} G={} B={}",
+            screen_x, screen_y, bg.hscroll, bg.vscroll,
+            map_x, map_y, fine_x, fine_y,
+            tilemap_entry_addr, entry, tile_num, palette,
+            hflip as u8, vflip as u8, priority as u8,
+            color_idx, cgram_idx, color, r, g, b
+        )
+    }
 }

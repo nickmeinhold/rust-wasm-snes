@@ -47,6 +47,10 @@ pub struct Bus {
 
     /// Pending DMA cycles to add to the CPU cycle count.
     pub pending_dma_cycles: u64,
+
+    /// Last CPU PC before a write (for write breakpoint logging).
+    pub last_write_bank: u8,
+    pub last_write_pc: u16,
 }
 
 impl Bus {
@@ -82,6 +86,8 @@ impl Bus {
 
             open_bus: 0,
             pending_dma_cycles: 0,
+            last_write_bank: 0,
+            last_write_pc: 0,
         }
     }
 
@@ -111,8 +117,8 @@ impl Bus {
                 self.wram_addr = (self.wram_addr + 1) & 0x1FFFF;
                 val
             }
-            (0x00..=0x3F, 0x4016) => 0, // Joypad serial (old-style, unused by LTTP)
-            (0x00..=0x3F, 0x4017) => 0,
+            (0x00..=0x3F, 0x4016) => self.joypad.read_serial(),
+            (0x00..=0x3F, 0x4017) => 0, // Player 2 — not implemented
             (0x00..=0x3F, 0x4200..=0x42FF) => self.read_cpu_register(addr),
             (0x00..=0x3F, 0x4300..=0x437F) => self.dma.read(addr),
             (0x00..=0x3F, 0x8000..=0xFFFF) => self.cart.read(bank, addr),
@@ -144,7 +150,16 @@ impl Bus {
             (0x7F, _) => { self.wram[0x10000 + addr as usize] = val; }
 
             (0x00..=0x3F, 0x0000..=0x1FFF) => { self.wram[addr as usize] = val; }
-            (0x00..=0x3F, 0x2100..=0x213F) => { self.ppu.write_register(addr, val); }
+            (0x00..=0x3F, 0x2100..=0x213F) => {
+                #[cfg(target_arch = "wasm32")]
+                if addr == 0x212C && val != self.ppu.tm {
+                    web_sys::console::log_1(
+                        &format!("TM write: {:02X} -> {:02X} from {:02X}:{:04X}",
+                            self.ppu.tm, val, self.last_write_bank, self.last_write_pc).into()
+                    );
+                }
+                self.ppu.write_register(addr, val);
+            }
             (0x00..=0x3F, 0x2140..=0x217F) => { self.apu.cpu_write((addr & 3) as u8, val); }
             (0x00..=0x3F, 0x2180) => { // WMDATA
                 self.wram[self.wram_addr as usize & 0x1FFFF] = val;
@@ -159,6 +174,7 @@ impl Bus {
             (0x00..=0x3F, 0x2183) => { // WMADDH
                 self.wram_addr = (self.wram_addr & 0x0FFFF) | (((val & 0x01) as u32) << 16);
             }
+            (0x00..=0x3F, 0x4016) => { self.joypad.write_strobe(val); }
             (0x00..=0x3F, 0x4200..=0x42FF) => { self.write_cpu_register(addr, val); }
             (0x00..=0x3F, 0x4300..=0x437F) => { self.dma.write(addr, val); }
             (0x00..=0x3F, 0x8000..=0xFFFF) => {} // ROM — writes ignored
@@ -235,9 +251,26 @@ impl Bus {
             0x4209 => { self.vtime = (self.vtime & 0x100) | val as u16; }
             0x420A => { self.vtime = (self.vtime & 0x0FF) | (((val & 0x01) as u16) << 8); }
             0x420B => { // MDMAEN — trigger general DMA
+                #[cfg(feature = "vram-trace")]
+                eprintln!("  $420B write val={:02X} from PC={:02X}:{:04X} wram[0]={:02X}",
+                    val, self.last_write_bank, self.last_write_pc, self.wram[0]);
                 self.execute_general_dma(val);
             }
-            0x420C => { self.hdmaen = val; }
+            0x420C => {
+                #[cfg(feature = "vram-trace")]
+                if val != self.hdmaen {
+                    // Log which channels are enabled and their targets
+                    let mut targets = String::new();
+                    for ch in 0..8u8 {
+                        if val & (1 << ch) != 0 {
+                            let dest = 0x2100u16 + self.dma.channels[ch as usize].dest as u16;
+                            targets.push_str(&format!(" ch{}→${:04X}", ch, dest));
+                        }
+                    }
+                    eprintln!("  HDMAEN: {:02X} -> {:02X}{}", self.hdmaen, val, targets);
+                }
+                self.hdmaen = val;
+            }
             0x420D => { self.memsel = val; }
             _ => {}
         }
@@ -252,6 +285,25 @@ impl Bus {
 
         for ch_idx in 0..8u8 {
             if enable_mask & (1 << ch_idx) == 0 { continue; }
+
+            #[cfg(feature = "vram-trace")]
+            {
+                let ch = &self.dma.channels[ch_idx as usize];
+                let dest = 0x2100u16 + ch.dest as u16;
+                let mode = ch.control & 0x07;
+                let size = if ch.size == 0 { 0x10000u32 } else { ch.size as u32 };
+                let game_mode = self.wram[0x0100];
+                let fixed = ch.control & 0x08 != 0;
+                let src_val = if ch.src_bank == 0x00 && (ch.src_addr as usize) < self.wram.len() {
+                    self.wram[ch.src_addr as usize]
+                } else { 0xFF };
+                eprintln!("  DMA ch{} mode={} dest=${:04X} src={:02X}:{:04X} size={} dir={} fixed={} src[0]={:02X} vram={:04X} vmain={:02X} game={:02X} scan={}",
+                    ch_idx, mode, dest, ch.src_bank, ch.src_addr, size,
+                    if ch.control & 0x80 != 0 { "B→A" } else { "A→B" },
+                    fixed, src_val,
+                    self.ppu.vram_addr, self.ppu.vram_increment, game_mode,
+                    self.ppu.scanline);
+            }
 
             let mode = (self.dma.channels[ch_idx as usize].control & 0x07) as usize;
             let direction = self.dma.channels[ch_idx as usize].control & 0x80 != 0;

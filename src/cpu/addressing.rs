@@ -90,9 +90,9 @@ pub fn direct_indirect_long_y(cpu: &mut Cpu, bus: &mut Bus) -> Addr {
     let hi = bus.read(base.bank, base.addr.wrapping_add(1)) as u16;
     let bank = bus.read(base.bank, base.addr.wrapping_add(2));
     let y = if cpu.is_x8() { cpu.y & 0xFF } else { cpu.y };
-    let ptr = (lo | (hi << 8)).wrapping_add(y);
-    // TODO: handle carry into bank byte for cross-bank indexing
-    Addr { bank, addr: ptr }
+    let full = (bank as u32) << 16 | (hi as u32) << 8 | lo as u32;
+    let effective = full.wrapping_add(y as u32);
+    Addr { bank: (effective >> 16) as u8, addr: effective as u16 }
 }
 
 // ── Absolute ────────────────────────────────────────────────────────────

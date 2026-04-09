@@ -174,6 +174,20 @@ impl Cpu {
             return 7 * 6;
         }
 
+        // Feature-gated CPU execution trace (compile-time, before fetch)
+        #[cfg(feature = "cpu-trace")]
+        {
+            let op = bus.read(self.pbr, self.pc);
+            eprintln!(
+                "PC:{:02X}:{:04X} OP:{:02X} A:{:04X} X:{:04X} Y:{:04X} SP:{:04X} P:{:02X} DP:{:04X} DB:{:02X} E:{}",
+                self.pbr, self.pc, op,
+                self.a, self.x, self.y, self.sp,
+                self.p.to_byte(self.emulation),
+                self.dp, self.dbr,
+                if self.emulation { 1 } else { 0 },
+            );
+        }
+
         // Fetch opcode
         let opcode = self.fetch_byte(bus);
 

@@ -135,6 +135,8 @@ impl Emulator {
                 if !self.bus.hblank && self.cpu.cycles >= hblank_start {
                     self.bus.hblank = true;
                 }
+                self.bus.last_write_bank = self.cpu.pbr;
+                self.bus.last_write_pc = self.cpu.pc;
                 let elapsed = self.cpu.step(&mut self.bus);
                 self.cpu.cycles += elapsed;
 
@@ -300,6 +302,22 @@ impl Emulator {
     /// Returns interleaved stereo i16 samples (L, R, L, R, ...) at 32 kHz.
     pub fn get_audio_samples(&mut self) -> Vec<i16> {
         self.bus.apu.drain_samples()
+    }
+
+    /// Probe a screen pixel — returns full decode chain for BG1.
+    pub fn probe_pixel(&self, screen_x: u16, screen_y: u16) -> String {
+        let ppu = &self.bus.ppu;
+        ppu.probe_bg_pixel(screen_x, screen_y)
+    }
+
+    /// Dump CGRAM (palette) as a flat array of 256 15-bit BGR values.
+    pub fn dump_cgram(&self) -> Vec<u16> {
+        let cg = &self.bus.ppu.cgram;
+        (0..256).map(|i| {
+            let lo = cg[i * 2] as u16;
+            let hi = cg[i * 2 + 1] as u16;
+            lo | (hi << 8)
+        }).collect()
     }
 
     /// Dump DSP voice state for audio debugging.
