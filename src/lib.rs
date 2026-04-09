@@ -304,6 +304,16 @@ impl Emulator {
         self.bus.apu.drain_samples()
     }
 
+    /// Read a WRAM byte (for console debugging).
+    pub fn read_wram(&self, addr: u32) -> u8 {
+        self.bus.wram[(addr as usize) & 0x1FFFF]
+    }
+
+    /// Read the raw BGMODE register value (including bg3hi bit).
+    pub fn bgmode_raw(&self) -> u8 {
+        self.bus.ppu.bgmode
+    }
+
     /// Probe a screen pixel — returns full decode chain for BG1.
     pub fn probe_pixel(&self, screen_x: u16, screen_y: u16) -> String {
         let ppu = &self.bus.ppu;
