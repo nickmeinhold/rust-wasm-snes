@@ -30,6 +30,15 @@ pub struct Emulator {
     cpu: Cpu,
     bus: Bus,
     frame_count: u64,
+    // Persistent RGBA framebuffer. Lives across frames so callers can read
+    // it via a memory view without copying — see `framebuffer_ptr()`.
+    rgba_buffer: Vec<u8>,
+    // Running FNV-1a 64-bit hash of every audio sample that has been
+    // consumed (drained via `get_audio_samples` or read+cleared via
+    // `clear_audio_samples`). Used by the bench harness as a determinism
+    // safety net for changes that touch the audio path. Equivalent to the
+    // framebuffer hash, but for sample data.
+    audio_hash: u64,
 }
 
 #[wasm_bindgen]
@@ -79,12 +88,96 @@ impl Emulator {
             cpu,
             bus,
             frame_count: 0,
+            rgba_buffer: vec![0u8; 256 * 224 * 4],
+            audio_hash: 0xcbf29ce484222325, // FNV-1a 64-bit offset basis
         })
     }
 
-    /// Run one complete frame (262 scanlines). Returns the framebuffer as
-    /// RGBA bytes suitable for ImageData.
+    /// Run one frame and return the RGBA framebuffer as a Vec<u8>.
+    /// Kept for backward compatibility with the existing `index.html`;
+    /// new code should prefer `run_frame_no_return()` + `framebuffer_ptr()`
+    /// for zero-copy access.
     pub fn run_frame(&mut self) -> Vec<u8> {
+        self.run_frame_inner();
+        self.rgba_buffer.clone()
+    }
+
+    /// Run one frame, writing the resulting RGBA framebuffer into the
+    /// persistent internal buffer. Combine with `framebuffer_ptr()` and
+    /// `framebuffer_len()` to read it from JS without copying.
+    pub fn run_frame_no_return(&mut self) {
+        self.run_frame_inner();
+    }
+
+    /// Byte offset of the persistent framebuffer within WASM linear memory.
+    /// Use with `wasm.memory.buffer` to construct a `Uint8ClampedArray` view.
+    pub fn framebuffer_ptr(&self) -> usize {
+        self.rgba_buffer.as_ptr() as usize
+    }
+
+    /// Length in bytes of the framebuffer (always 256 * 224 * 4 = 229376).
+    pub fn framebuffer_len(&self) -> usize {
+        self.rgba_buffer.len()
+    }
+
+    /// Byte offset of the APU sample buffer within WASM linear memory.
+    /// Use with `wasm.memory.buffer` to construct an `Int16Array` view —
+    /// no copy across the language boundary. Pair with `audio_samples_len()`.
+    /// Caller must call `clear_audio_samples()` after consuming the data,
+    /// otherwise samples accumulate indefinitely.
+    pub fn audio_samples_ptr(&self) -> usize {
+        self.bus.apu.sample_buffer.as_ptr() as usize
+    }
+
+    /// Number of i16 samples currently in the APU buffer.
+    pub fn audio_samples_len(&self) -> usize {
+        self.bus.apu.sample_buffer.len()
+    }
+
+    /// Reset the APU sample buffer length to zero. Capacity is retained,
+    /// so no reallocation happens — subsequent pushes reuse the same heap.
+    /// Also folds the about-to-be-discarded samples into the running audio
+    /// hash, so callers using zero-copy reads get the same hash as callers
+    /// using the legacy `get_audio_samples` drain.
+    pub fn clear_audio_samples(&mut self) {
+        Self::audio_hash_update(&mut self.audio_hash, &self.bus.apu.sample_buffer);
+        self.bus.apu.sample_buffer.clear();
+    }
+
+    /// Running FNV-1a 64-bit hash of every audio sample consumed so far,
+    /// formatted as 16 hex digits. Mirror of `final_fb_hash` for the audio
+    /// path. Stable across native and browser runs as long as samples are
+    /// drained/cleared in the same order.
+    pub fn audio_samples_hash(&self) -> String {
+        format!("{:016x}", self.audio_hash)
+    }
+
+    /// Snapshot of the per-opcode execution count (length 256, indexed by
+    /// opcode byte). Diagnostic tool for finding the CPU dispatch hot path.
+    pub fn cpu_opcode_counts(&self) -> Vec<u64> {
+        self.cpu.opcode_counts.to_vec()
+    }
+
+    /// Update the running audio hash with a slice of i16 samples.
+    /// Hashes the underlying byte representation (little-endian on every
+    /// target Rust+WASM supports). Equivalent to FNV-1a 64-bit applied to
+    /// the raw sample bytes — same algorithm as the framebuffer hash.
+    fn audio_hash_update(hash: &mut u64, samples: &[i16]) {
+        let bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(samples.as_ptr() as *const u8, samples.len() * 2)
+        };
+        let mut h = *hash;
+        for &b in bytes {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x100000001b3);
+        }
+        *hash = h;
+    }
+
+    /// Shared inner implementation: runs one frame of emulation, writes the
+    /// resulting ARGB framebuffer to `self.rgba_buffer` as RGBA bytes.
+    /// Private — not exported via wasm-bindgen.
+    fn run_frame_inner(&mut self) {
         for scanline in 0..SCANLINES_PER_FRAME {
             // VBlank start
             if scanline == VBLANK_START {
@@ -162,17 +255,17 @@ impl Emulator {
 
         self.frame_count += 1;
 
-        // Convert framebuffer to RGBA bytes for Canvas ImageData.
-        // Our framebuffer is ARGB u32, Canvas wants RGBA u8.
+        // Convert framebuffer to RGBA bytes into the persistent buffer.
+        // Our framebuffer is ARGB u32; Canvas wants RGBA u8.
         let fb = &self.bus.ppu.frame_buffer;
-        let mut rgba = Vec::with_capacity(256 * 224 * 4);
-        for &pixel in fb.iter() {
-            rgba.push(((pixel >> 16) & 0xFF) as u8); // R
-            rgba.push(((pixel >> 8) & 0xFF) as u8);  // G
-            rgba.push((pixel & 0xFF) as u8);          // B
-            rgba.push(255);                            // A
+        let dst = &mut self.rgba_buffer;
+        for (i, &pixel) in fb.iter().enumerate() {
+            let o = i * 4;
+            dst[o]     = ((pixel >> 16) & 0xFF) as u8; // R
+            dst[o + 1] = ((pixel >> 8)  & 0xFF) as u8; // G
+            dst[o + 2] = ( pixel        & 0xFF) as u8; // B
+            dst[o + 3] = 255;                          // A
         }
-        rgba
     }
 
     /// Set a button state. `button` is a SNES button mask, `pressed` is the state.
@@ -300,8 +393,12 @@ impl Emulator {
 
     /// Get audio samples generated during the last frame.
     /// Returns interleaved stereo i16 samples (L, R, L, R, ...) at 32 kHz.
+    /// Also folds the drained samples into the running audio hash so that
+    /// either drain method (this one or zero-copy + clear) updates it.
     pub fn get_audio_samples(&mut self) -> Vec<i16> {
-        self.bus.apu.drain_samples()
+        let samples = self.bus.apu.drain_samples();
+        Self::audio_hash_update(&mut self.audio_hash, &samples);
+        samples
     }
 
     /// Read a WRAM byte (for console debugging).
@@ -348,7 +445,12 @@ impl Emulator {
     }
 }
 
-/// Log to the browser console.
+/// Log to the browser console (no-op on native targets so the same
+/// emulator code can be driven by `bin/bench.rs` and friends).
+#[cfg(target_arch = "wasm32")]
 fn log(msg: &str) {
     web_sys::console::log_1(&JsValue::from_str(msg));
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+fn log(_msg: &str) {}

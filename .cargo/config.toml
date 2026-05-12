@@ -1,0 +1,7 @@
+# Build flags for the wasm32 target only.
+# `+simd128` enables WASM SIMD instructions, which Rust's autovectorizer
+# can lift hot integer loops (PPU pixel composition, DSP filters) into.
+# Native builds (the `bin/bench.rs` harness) inherit no special flags here,
+# so they keep using x86_64 SIMD via LLVM's normal autovectorizer.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]
