@@ -149,6 +149,119 @@ pub struct Dsp {
 impl Dsp {
     pub fn dump_voices(&self) -> String { String::new() }
 
+    // ── Snapshot / restore ──────────────────────────────────────────
+    // Voice fields are private; encoding lives here so the format is
+    // colocated with the struct definition.
+
+    /// Serialize the full DSP state.
+    pub fn snapshot_state(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(2048);
+        out.extend_from_slice(&self.regs);
+        out.push(self.addr_reg);
+        for v in &self.voices {
+            out.push(v.vol_l as u8);
+            out.push(v.vol_r as u8);
+            out.extend_from_slice(&v.pitch.to_le_bytes());
+            out.push(v.srcn);
+            out.push(v.adsr1);
+            out.push(v.adsr2);
+            out.push(v.gain);
+            out.extend_from_slice(&v.env_level.to_le_bytes());
+            out.extend_from_slice(&v.hidden_env.to_le_bytes());
+            out.push(match v.env_phase {
+                EnvPhase::Attack => 0,
+                EnvPhase::Decay => 1,
+                EnvPhase::Sustain => 2,
+                EnvPhase::Release => 3,
+                EnvPhase::Off => 4,
+            });
+            for s in &v.brr_buf { out.extend_from_slice(&s.to_le_bytes()); }
+            out.extend_from_slice(&(v.brr_buf_pos as u32).to_le_bytes());
+            out.extend_from_slice(&v.brr_addr.to_le_bytes());
+            out.push(v.brr_header);
+            out.push(v.brr_offset);
+            out.push(v.kon_delay);
+            out.extend_from_slice(&v.interp_pos.to_le_bytes());
+        }
+        out.extend_from_slice(&self.global_counter.to_le_bytes());
+        out.extend_from_slice(&self.echo_pos.to_le_bytes());
+        out.extend_from_slice(&self.echo_length.to_le_bytes());
+        for s in &self.echo_hist_l { out.extend_from_slice(&s.to_le_bytes()); }
+        for s in &self.echo_hist_r { out.extend_from_slice(&s.to_le_bytes()); }
+        out.extend_from_slice(&(self.echo_hist_pos as u32).to_le_bytes());
+        out.extend_from_slice(&self.noise.to_le_bytes());
+        out.push(self.new_kon);
+        out.extend_from_slice(&self.kon_write_count.to_le_bytes());
+        out.extend_from_slice(&self.kon_nonzero_count.to_le_bytes());
+        out
+    }
+
+    /// Restore the DSP state from a blob produced by `snapshot_state`.
+    pub fn restore_state(&mut self, bytes: &[u8]) -> Result<(), String> {
+        // Use a small cursor to parse sequentially.
+        let mut p = 0usize;
+        macro_rules! need { ($n:expr) => {
+            if bytes.len() < p + $n {
+                return Err(format!("dsp snapshot: short read at {}", p));
+            }
+        }; }
+        macro_rules! take { ($n:expr) => {{
+            need!($n);
+            let s = &bytes[p..p + $n];
+            p += $n;
+            s
+        }}; }
+
+        let r = take!(128);
+        self.regs.copy_from_slice(r);
+        self.addr_reg = take!(1)[0];
+
+        for v in &mut self.voices {
+            v.vol_l = take!(1)[0] as i8;
+            v.vol_r = take!(1)[0] as i8;
+            v.pitch = u16::from_le_bytes(take!(2).try_into().unwrap());
+            v.srcn = take!(1)[0];
+            v.adsr1 = take!(1)[0];
+            v.adsr2 = take!(1)[0];
+            v.gain = take!(1)[0];
+            v.env_level = i32::from_le_bytes(take!(4).try_into().unwrap());
+            v.hidden_env = i32::from_le_bytes(take!(4).try_into().unwrap());
+            v.env_phase = match take!(1)[0] {
+                0 => EnvPhase::Attack,
+                1 => EnvPhase::Decay,
+                2 => EnvPhase::Sustain,
+                3 => EnvPhase::Release,
+                4 => EnvPhase::Off,
+                n => return Err(format!("dsp snapshot: bad env_phase {}", n)),
+            };
+            for i in 0..12 {
+                v.brr_buf[i] = i32::from_le_bytes(take!(4).try_into().unwrap());
+            }
+            v.brr_buf_pos = u32::from_le_bytes(take!(4).try_into().unwrap()) as usize;
+            v.brr_addr = u16::from_le_bytes(take!(2).try_into().unwrap());
+            v.brr_header = take!(1)[0];
+            v.brr_offset = take!(1)[0];
+            v.kon_delay = take!(1)[0];
+            v.interp_pos = i32::from_le_bytes(take!(4).try_into().unwrap());
+        }
+
+        self.global_counter = u32::from_le_bytes(take!(4).try_into().unwrap());
+        self.echo_pos = u16::from_le_bytes(take!(2).try_into().unwrap());
+        self.echo_length = u16::from_le_bytes(take!(2).try_into().unwrap());
+        for i in 0..8 {
+            self.echo_hist_l[i] = i32::from_le_bytes(take!(4).try_into().unwrap());
+        }
+        for i in 0..8 {
+            self.echo_hist_r[i] = i32::from_le_bytes(take!(4).try_into().unwrap());
+        }
+        self.echo_hist_pos = u32::from_le_bytes(take!(4).try_into().unwrap()) as usize;
+        self.noise = i16::from_le_bytes(take!(2).try_into().unwrap());
+        self.new_kon = take!(1)[0];
+        self.kon_write_count = u32::from_le_bytes(take!(4).try_into().unwrap());
+        self.kon_nonzero_count = u32::from_le_bytes(take!(4).try_into().unwrap());
+        Ok(())
+    }
+
     pub fn new() -> Self {
         Self {
             regs: [0; 128],

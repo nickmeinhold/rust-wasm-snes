@@ -343,4 +343,132 @@ impl Apu {
     pub fn drain_samples(&mut self) -> Vec<i16> {
         std::mem::take(&mut self.sample_buffer)
     }
+
+    // ── Snapshot / restore ──────────────────────────────────────────
+    //
+    // The APU has private fields (`output_filter`, `cycle_debt`, …) so
+    // its serializer lives here. The format is fixed-layout binary —
+    // see `snapshot.rs` for the overall scheme.
+
+    /// Serialize APU state into a self-contained blob.
+    pub fn snapshot(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(80 * 1024);
+
+        // ── SPC700 CPU registers ──
+        out.push(self.cpu.a);
+        out.push(self.cpu.x);
+        out.push(self.cpu.y);
+        out.push(self.cpu.sp);
+        out.extend_from_slice(&self.cpu.pc.to_le_bytes());
+        out.push(self.cpu.psw);
+        out.push(if self.cpu.halted { 1 } else { 0 });
+
+        // ── ApuBus ──
+        out.extend_from_slice(&*self.bus.ram); // 64 KB
+        // DSP
+        let dsp_blob = self.bus.dsp.snapshot_state();
+        out.extend_from_slice(&(dsp_blob.len() as u32).to_le_bytes());
+        out.extend_from_slice(&dsp_blob);
+        // Timers
+        for t in &self.bus.timers {
+            let b = t.snapshot_state();
+            out.extend_from_slice(&b);
+        }
+        // Ports
+        out.extend_from_slice(&self.bus.ports_from_main);
+        out.extend_from_slice(&self.bus.ports_to_main);
+        out.push(if self.bus.rom_enabled { 1 } else { 0 });
+
+        // ── Apu top-level ──
+        out.extend_from_slice(&self.cycles.to_le_bytes());
+        out.extend_from_slice(&self.cycle_frac.to_le_bytes());
+        out.extend_from_slice(&self.cycle_debt.to_le_bytes());
+        out.extend_from_slice(&self.dsp_counter.to_le_bytes());
+        // Sample buffer (length-prefixed). Each sample is 2 bytes.
+        out.extend_from_slice(&(self.sample_buffer.len() as u32).to_le_bytes());
+        for &s in &self.sample_buffer { out.extend_from_slice(&s.to_le_bytes()); }
+
+        // ── Output filter (private). 2 channels × 3 i32 + gain + bass. ──
+        for c in &self.output_filter.ch {
+            out.extend_from_slice(&c.p1.to_le_bytes());
+            out.extend_from_slice(&c.pp1.to_le_bytes());
+            out.extend_from_slice(&c.sum.to_le_bytes());
+        }
+        out.extend_from_slice(&self.output_filter.gain.to_le_bytes());
+        out.extend_from_slice(&self.output_filter.bass.to_le_bytes());
+
+        out
+    }
+
+    /// Restore APU state from a blob produced by `snapshot`.
+    pub fn restore(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let mut p = 0usize;
+        macro_rules! need { ($n:expr) => {
+            if bytes.len() < p + $n {
+                return Err(format!("apu snapshot: short read at {}", p));
+            }
+        }; }
+        macro_rules! take { ($n:expr) => {{
+            need!($n);
+            let s = &bytes[p..p + $n];
+            p += $n;
+            s
+        }}; }
+
+        // SPC700 CPU
+        self.cpu.a = take!(1)[0];
+        self.cpu.x = take!(1)[0];
+        self.cpu.y = take!(1)[0];
+        self.cpu.sp = take!(1)[0];
+        self.cpu.pc = u16::from_le_bytes(take!(2).try_into().unwrap());
+        self.cpu.psw = take!(1)[0];
+        self.cpu.halted = take!(1)[0] != 0;
+
+        // ApuBus RAM
+        let ram = take!(65536);
+        self.bus.ram.copy_from_slice(ram);
+
+        // DSP
+        let dsp_len = u32::from_le_bytes(take!(4).try_into().unwrap()) as usize;
+        let dsp_bytes = take!(dsp_len);
+        self.bus.dsp.restore_state(dsp_bytes)?;
+
+        // Timers
+        for t in &mut self.bus.timers {
+            let b = take!(6);
+            let mut arr = [0u8; 6];
+            arr.copy_from_slice(b);
+            t.restore_state(&arr);
+        }
+
+        // Ports
+        let pf = take!(4); self.bus.ports_from_main.copy_from_slice(pf);
+        let pt = take!(4); self.bus.ports_to_main.copy_from_slice(pt);
+        self.bus.rom_enabled = take!(1)[0] != 0;
+
+        // Apu top-level
+        self.cycles = u64::from_le_bytes(take!(8).try_into().unwrap());
+        self.cycle_frac = u32::from_le_bytes(take!(4).try_into().unwrap());
+        self.cycle_debt = i64::from_le_bytes(take!(8).try_into().unwrap());
+        self.dsp_counter = u32::from_le_bytes(take!(4).try_into().unwrap());
+
+        let nsamp = u32::from_le_bytes(take!(4).try_into().unwrap()) as usize;
+        self.sample_buffer.clear();
+        self.sample_buffer.reserve(nsamp);
+        for _ in 0..nsamp {
+            let s = i16::from_le_bytes(take!(2).try_into().unwrap());
+            self.sample_buffer.push(s);
+        }
+
+        // Output filter
+        for c in &mut self.output_filter.ch {
+            c.p1 = i32::from_le_bytes(take!(4).try_into().unwrap());
+            c.pp1 = i32::from_le_bytes(take!(4).try_into().unwrap());
+            c.sum = i32::from_le_bytes(take!(4).try_into().unwrap());
+        }
+        self.output_filter.gain = i32::from_le_bytes(take!(4).try_into().unwrap());
+        self.output_filter.bass = i32::from_le_bytes(take!(4).try_into().unwrap());
+
+        Ok(())
+    }
 }

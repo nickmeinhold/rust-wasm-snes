@@ -40,3 +40,11 @@ cpu-trace = []
 [profile.release]
 opt-level = 3
 lto = "thin"
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
+[[bin]]
+name = "snapshot_test"
+path = "src/bin/snapshot_test.rs"

@@ -76,4 +76,29 @@ impl Joypad {
         self.bit_index += 1;
         bit as u8
     }
+
+    // ── Snapshot / restore ────────────────────────────────────────────
+    // Private fields force serialization to live on the Joypad itself.
+
+    /// Serialize joypad state to a small fixed-layout blob.
+    pub fn snapshot_state(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(6);
+        out.extend_from_slice(&self.current.to_le_bytes());
+        out.extend_from_slice(&self.latched.to_le_bytes());
+        out.push(self.bit_index);
+        out.push(if self.strobe { 1 } else { 0 });
+        out
+    }
+
+    /// Restore joypad state from a blob produced by `snapshot_state`.
+    pub fn restore_state(&mut self, bytes: &[u8]) -> Result<(), String> {
+        if bytes.len() != 6 {
+            return Err(format!("joypad snapshot: expected 6 bytes, got {}", bytes.len()));
+        }
+        self.current = u16::from_le_bytes([bytes[0], bytes[1]]);
+        self.latched = u16::from_le_bytes([bytes[2], bytes[3]]);
+        self.bit_index = bytes[4];
+        self.strobe = bytes[5] != 0;
+        Ok(())
+    }
 }

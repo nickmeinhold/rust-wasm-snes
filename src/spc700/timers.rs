@@ -54,4 +54,22 @@ impl Timer {
         { self.read_count += 1; }
         val
     }
+
+    /// Serialize timer state to a fixed-size blob (6 bytes).
+    pub fn snapshot_state(&self) -> [u8; 6] {
+        let mut out = [0u8; 6];
+        out[0..2].copy_from_slice(&self.target.to_le_bytes());
+        out[2..4].copy_from_slice(&self.divider.to_le_bytes());
+        out[4] = self.counter;
+        out[5] = if self.enabled { 1 } else { 0 };
+        out
+    }
+
+    /// Restore timer state from a blob produced by `snapshot_state`.
+    pub fn restore_state(&mut self, b: &[u8; 6]) {
+        self.target = u16::from_le_bytes([b[0], b[1]]);
+        self.divider = u16::from_le_bytes([b[2], b[3]]);
+        self.counter = b[4];
+        self.enabled = b[5] != 0;
+    }
 }

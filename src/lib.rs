@@ -11,6 +11,7 @@ pub mod dma;
 pub mod joypad;
 pub mod ppu;
 pub mod rom;
+pub mod snapshot;
 pub mod spc;
 pub mod spc700;
 
