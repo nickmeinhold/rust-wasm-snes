@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>SNES — Rust/WASM Emulator (Phase B)</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #111;
+            color: #eee;
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+        }
+        h1 {
+            font-size: 1.2rem;
+            color: #c8a84e;
+            margin-bottom: 0.5rem;
+            letter-spacing: 0.1em;
+        }
+        h1 .tag {
+            color: #4ec88a;
+            font-size: 0.7rem;
+            margin-left: 0.5rem;
+        }
+        #screen {
+            border: 3px solid #333;
+            border-radius: 4px;
+            image-rendering: pixelated;
+            image-rendering: crisp-edges;
+            cursor: none;
+        }
+        .controls {
+            margin-top: 1rem;
+            font-size: 0.8rem;
+            color: #666;
+            text-align: center;
+            line-height: 1.6;
+        }
+        .controls kbd {
+            background: #222;
+            border: 1px solid #444;
+            border-radius: 3px;
+            padding: 1px 5px;
+            font-size: 0.75rem;
+        }
+        #status {
+            margin-top: 0.5rem;
+            font-size: 0.75rem;
+            color: #555;
+        }
+        #drop-zone {
+            border: 2px dashed #444;
+            border-radius: 8px;
+            padding: 3rem 4rem;
+            text-align: center;
+            color: #666;
+            cursor: pointer;
+            transition: border-color 0.2s, color 0.2s;
+        }
+        #drop-zone:hover, #drop-zone.dragover {
+            border-color: #c8a84e;
+            color: #c8a84e;
+        }
+        #drop-zone input { display: none; }
+    </style>
+</head>
+<body>
+    <h1>SNES — Rust/WASM Emulator <span class="tag">[phase-b: worker]</span></h1>
+
+    <div id="drop-zone">
+        <p>Drop your <strong>.smc</strong> ROM here</p>
+        <p style="margin-top: 0.5rem; font-size: 0.8rem">or click to browse</p>
+        <input type="file" id="rom-input" accept=".smc,.sfc">
+    </div>
+
+    <canvas id="screen" width="256" height="224" style="display: none"></canvas>
+
+    <div class="controls">
+        <kbd>←</kbd><kbd>↑</kbd><kbd>↓</kbd><kbd>→</kbd> Move &nbsp;
+        <kbd>Z</kbd> B &nbsp; <kbd>X</kbd> Y &nbsp;
+        <kbd>A</kbd> A &nbsp; <kbd>S</kbd> X &nbsp;
+        <kbd>Q</kbd> L &nbsp; <kbd>W</kbd> R &nbsp;
+        <kbd>Enter</kbd> Start &nbsp; <kbd>Tab</kbd> Select &nbsp;
+        <kbd>Esc</kbd> <span id="back-btn" style="cursor:pointer; color:#c8a84e; text-decoration:underline">Back</span>
+    </div>
+    <div id="status"></div>
+
+    <script type="module">
+        // Phase B — Step 1: emulator runs in a Web Worker; main thread
+        // only paints + handles input + plays audio.
+        //
+        // Audio remains on the main thread via the existing
+        // ScriptProcessor path. It will glitch under main-thread load —
+        // that is expected and gets fixed in Step 3 (AudioWorklet + SAB
+        // ring buffer).
+
+        const canvas = document.getElementById('screen');
+        const ctx = canvas.getContext('2d');
+        const status = document.getElementById('status');
+        const dropZone = document.getElementById('drop-zone');
+        const romInput = document.getElementById('rom-input');
+
+        const SCALE = 3;
+        canvas.style.width = `${256 * SCALE}px`;
+        canvas.style.height = `${224 * SCALE}px`;
+
+        // ImageData reused across frames — its underlying Uint8ClampedArray
+        // is overwritten by `set()` each paint, avoiding GC churn.
+        const imageData = ctx.createImageData(256, 224);
+
+        // ── Button mapping ─────────────────────────────────────
+        const KEY_MAP = {
+            'KeyZ':      0x8000, // B
+            'KeyX':      0x4000, // Y
+            'Tab':       0x2000, // Select
+            'Enter':     0x1000, // Start
+            'ArrowUp':   0x0800,
+            'ArrowDown': 0x0400,
+            'ArrowLeft': 0x0200,
+            'ArrowRight':0x0100,
+            'KeyA':      0x0080, // A
+            'KeyS':      0x0040, // X
+            'KeyQ':      0x0020, // L
+            'KeyW':      0x0010, // R
+        };
+
+        // ── Worker setup ──────────────────────────────────────
+        // Resolve worker URL relative to this HTML so it works regardless
+        // of where the page is served from.
+        const worker = new Worker(
+            new URL('./emulator-worker.js', import.meta.url),
+            { type: 'module' }
+        );
+
+        let workerReady = false;
+        let lastFrameCount = 0n;
+
+        // ── Audio (still on main thread for Phase B Step 1) ───
+        const RING_SIZE = 65536;
+        const AUDIO_GAIN = 4;
+        const ringL = new Float32Array(RING_SIZE);
+        const ringR = new Float32Array(RING_SIZE);
+        let ringWrite = 0;
+        let ringRead = 0;
+        let audioCtx = null;
+        let audioStarted = false;
+
+        function initAudio() {
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: 32000
+                });
+                const processor = audioCtx.createScriptProcessor(1024, 0, 2);
+                processor.onaudioprocess = (e) => {
+                    const left = e.outputBuffer.getChannelData(0);
+                    const right = e.outputBuffer.getChannelData(1);
+                    for (let i = 0; i < left.length; i++) {
+                        if (ringRead !== ringWrite) {
+                            left[i] = ringL[ringRead & (RING_SIZE - 1)];
+                            right[i] = ringR[ringRead & (RING_SIZE - 1)];
+                            ringRead++;
+                        } else {
+                            left[i] = 0;
+                            right[i] = 0;
+                        }
+                    }
+                };
+                processor.connect(audioCtx.destination);
+                audioStarted = true;
+                console.log('Audio: 32kHz stereo (suspended until gesture)');
+            } catch (err) {
+                console.warn('Audio init failed:', err);
+            }
+
+            const resume = () => {
+                if (audioCtx && audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                    ringRead = ringWrite; // flush stale
+                }
+                document.removeEventListener('keydown', resume);
+                document.removeEventListener('click', resume);
+            };
+            document.addEventListener('keydown', resume);
+            document.addEventListener('click', resume);
+        }
+
+        function pushAudioSamples(samples) {
+            if (!audioStarted || samples.length < 2) return;
+            const stereo = samples.length >> 1;
+            for (let i = 0; i < stereo; i++) {
+                const idx = ringWrite & (RING_SIZE - 1);
+                ringL[idx] = Math.max(-1, Math.min(1, samples[i*2]   / 32768 * AUDIO_GAIN));
+                ringR[idx] = Math.max(-1, Math.min(1, samples[i*2+1] / 32768 * AUDIO_GAIN));
+                ringWrite++;
+            }
+            // Cap to prevent drift.
+            const MAX_BUFFERED = 4096;
+            const buffered = (ringWrite - ringRead) >>> 0;
+            if (buffered > MAX_BUFFERED) ringRead = ringWrite - MAX_BUFFERED;
+        }
+
+        // ── Worker message handling ───────────────────────────
+        worker.onmessage = (ev) => {
+            const msg = ev.data;
+            if (msg.type === 'ready') {
+                workerReady = true;
+                worker.postMessage({ type: 'start' });
+                return;
+            }
+            if (msg.type === 'frame') {
+                // fb is a transferred Uint8Array (256*224*4 bytes RGBA).
+                imageData.data.set(msg.fb);
+                ctx.putImageData(imageData, 0, 0);
+                pushAudioSamples(msg.audio);
+
+                lastFrameCount = msg.frameCount;
+                if (msg.seq % 60 === 0) {
+                    status.textContent = `Frame ${lastFrameCount} (worker)`;
+                }
+            }
+        };
+
+        // ── ROM loading ───────────────────────────────────────
+        dropZone.addEventListener('click', () => romInput.click());
+        romInput.addEventListener('change', (e) => loadFile(e.target.files[0]));
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files.length > 0) loadFile(e.dataTransfer.files[0]);
+        });
+
+        async function loadFile(file) {
+            if (!file) return;
+            status.textContent = `Loading ${file.name}...`;
+            const data = new Uint8Array(await file.arrayBuffer());
+            await startEmulator(data, file.name);
+        }
+
+        // Try local ROM auto-load (mirrors index.html behavior).
+        (async () => {
+            try {
+                const resp = await fetch('rom/zelda3.smc');
+                if (resp.ok) {
+                    const data = new Uint8Array(await resp.arrayBuffer());
+                    let romTitle = 'SNES Game';
+                    if (data.length > 0x7FD5) {
+                        const raw = data.slice(0x7FC0, 0x7FD5);
+                        const decoded = String.fromCharCode(...raw).trim();
+                        if (/^[\x20-\x7E]+$/.test(decoded) && decoded.length > 0) {
+                            romTitle = decoded;
+                        }
+                    }
+                    await startEmulator(data, romTitle);
+                }
+            } catch (_) {}
+        })();
+
+        async function startEmulator(romData, romName) {
+            initAudio();
+
+            const title = (romName || 'Unknown').replace(/\.(smc|sfc)$/i, '');
+            document.title = `SNES — ${title} [phase-b]`;
+
+            dropZone.style.display = 'none';
+            canvas.style.display = 'block';
+            canvas.focus();
+
+            // ROM bytes are transferred to the worker (zero-copy).
+            // We pass a copy to avoid neutering the caller's buffer.
+            const romCopy = new Uint8Array(romData);
+            worker.postMessage(
+                { type: 'load', rom: romCopy },
+                [romCopy.buffer]
+            );
+        }
+
+        // ── Stop / back ───────────────────────────────────────
+        function stopEmulator() {
+            worker.postMessage({ type: 'stop' });
+            if (audioCtx) { audioCtx.close(); audioCtx = null; audioStarted = false; }
+            canvas.style.display = 'none';
+            dropZone.style.display = '';
+            status.textContent = '';
+            ringWrite = 0; ringRead = 0;
+        }
+        document.getElementById('back-btn').addEventListener('click', stopEmulator);
+
+        // ── Input handling ────────────────────────────────────
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Escape') { stopEmulator(); return; }
+            const btn = KEY_MAP[e.code];
+            if (btn !== undefined) {
+                e.preventDefault();
+                worker.postMessage({ type: 'input', button: btn, pressed: true });
+            }
+        });
+        document.addEventListener('keyup', (e) => {
+            const btn = KEY_MAP[e.code];
+            if (btn !== undefined) {
+                e.preventDefault();
+                worker.postMessage({ type: 'input', button: btn, pressed: false });
+            }
+        });
+    </script>
+</body>
+</html>
