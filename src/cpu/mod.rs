@@ -101,6 +101,10 @@ pub struct Cpu {
 
     /// Enable instruction tracing to stderr.
     pub trace: bool,
+
+    /// Per-opcode execution count. Indexed by opcode byte. Box-allocated to
+    /// avoid bloating the Cpu struct (256 × u64 = 2 KiB).
+    pub opcode_counts: Box<[u64; 256]>,
 }
 
 impl Cpu {
@@ -122,6 +126,7 @@ impl Cpu {
             stopped: false,
             waiting: false,
             trace: false,
+            opcode_counts: Box::new([0u64; 256]),
         }
     }
 
@@ -142,7 +147,7 @@ impl Cpu {
         let hi = bus.read(0x00, 0xFFFD) as u16;
         self.pc = lo | (hi << 8);
 
-        println!("CPU reset → PC = ${:04X}", self.pc);
+        eprintln!("CPU reset → PC = ${:04X}", self.pc);
     }
 
     /// Execute one instruction. Returns the number of master cycles consumed.
@@ -190,6 +195,7 @@ impl Cpu {
 
         // Fetch opcode
         let opcode = self.fetch_byte(bus);
+        self.opcode_counts[opcode as usize] += 1;
 
         if self.trace {
             let name = tables::OPCODE_NAMES[opcode as usize];

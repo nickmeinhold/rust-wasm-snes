@@ -1,0 +1,115 @@
+name: Bench Determinism Gate
+
+# Runs the native bench harness on every push and PR, then asserts the
+# framebuffer + audio FNV-1a hashes match the recorded reference values.
+# Any divergence (off-by-one CPU bug, DSP regression, timing drift) flips
+# the hash and fails CI. This is the determinism contract, enforced.
+#
+# Reference values are for SMW × 600 frames. The ROM is copyrighted, so
+# it's loaded from a base64-encoded GitHub Actions secret rather than
+# committed. To configure: encode the ROM with `base64 -i rom/smw.smc`
+# and set `SMW_ROM_B64` in repo secrets. If the secret is missing the
+# job skips with a clear message rather than failing — keeps forks green.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  bench-hash-gate:
+    runs-on: ubuntu-latest
+    env:
+      # Reference hashes captured from a known-good run. Update these
+      # only when an intentional emulator change shifts deterministic
+      # output (and document why in the commit message).
+      EXPECTED_FB_HASH: "54b3eed74f9f8432"
+      EXPECTED_AUDIO_HASH: "62300ecfc4da23e0"
+      BENCH_FRAMES: "600"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-bench-
+
+      - name: Check ROM secret availability
+        id: rom_check
+        env:
+          ROM_B64: ${{ secrets.SMW_ROM_B64 }}
+        run: |
+          if [ -z "$ROM_B64" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::SMW_ROM_B64 secret not set — skipping bench hash gate. Configure the secret to enforce determinism on this branch."
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Decode test ROM
+        if: steps.rom_check.outputs.available == 'true'
+        env:
+          ROM_B64: ${{ secrets.SMW_ROM_B64 }}
+        run: |
+          mkdir -p rom
+          printf '%s' "$ROM_B64" | base64 -d > rom/smw.smc
+          ls -la rom/smw.smc
+
+      - name: Build bench (release)
+        if: steps.rom_check.outputs.available == 'true'
+        run: cargo build --release --bin bench
+
+      - name: Run bench
+        if: steps.rom_check.outputs.available == 'true'
+        run: |
+          ./target/release/bench --frames "$BENCH_FRAMES" rom/smw.smc > bench-result.json
+          echo "--- bench-result.json ---"
+          cat bench-result.json
+
+      - name: Install jq
+        if: steps.rom_check.outputs.available == 'true'
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Assert hash equality
+        if: steps.rom_check.outputs.available == 'true'
+        run: |
+          set -euo pipefail
+          FB=$(jq -r '.final_fb_hash' bench-result.json)
+          AUDIO=$(jq -r '.final_audio_hash' bench-result.json)
+          echo "framebuffer hash: $FB    (expected: $EXPECTED_FB_HASH)"
+          echo "audio hash:       $AUDIO    (expected: $EXPECTED_AUDIO_HASH)"
+          fail=0
+          if [ "$FB" != "$EXPECTED_FB_HASH" ]; then
+            echo "::error::Framebuffer hash mismatch — emulator output diverged from the recorded reference."
+            fail=1
+          fi
+          if [ "$AUDIO" != "$EXPECTED_AUDIO_HASH" ]; then
+            echo "::error::Audio hash mismatch — APU/DSP output diverged from the recorded reference."
+            fail=1
+          fi
+          if [ "$fail" -ne 0 ]; then
+            echo ""
+            echo "Determinism contract broken. If this divergence is intentional"
+            echo "(e.g. an audio fix or CPU correctness change), update the"
+            echo "EXPECTED_*_HASH values in .github/workflows/bench.yml and"
+            echo "document the reason in the commit message."
+            exit 1
+          fi
+          echo "ok — both hashes match reference."
+
+      - name: Upload bench result
+        if: always() && steps.rom_check.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-result
+          path: bench-result.json
+          if-no-files-found: ignore

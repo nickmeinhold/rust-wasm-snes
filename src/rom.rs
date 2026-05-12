@@ -83,7 +83,18 @@ impl Cartridge {
         let checksum = u16::from_le_bytes([h[0x1E], h[0x1F]]); // $7FDE
 
         // SRAM — LTTP uses 8KB battery save.
-        let sram = vec![0u8; ram_size];
+        // Try loading from .srm file alongside the ROM.
+        let srm_path = path.with_extension("srm");
+        let sram = if srm_path.exists() {
+            let data = std::fs::read(&srm_path)
+                .unwrap_or_else(|_| vec![0u8; ram_size]);
+            eprintln!("Loaded SRAM from {}", srm_path.display());
+            let mut s = data;
+            s.resize(ram_size, 0);
+            s
+        } else {
+            vec![0u8; ram_size]
+        };
 
         let cart = Self {
             rom,

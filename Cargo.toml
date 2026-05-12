@@ -32,6 +32,10 @@ path = "src/bin/spc_player.rs"
 name = "debug_tm"
 path = "src/bin/debug_tm.rs"
 
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
 [features]
 trace = []
 vram-trace = []
