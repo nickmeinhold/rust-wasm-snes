@@ -1,15 +1,21 @@
 name: Bench Determinism Gate
 
-# Runs the native bench harness on every push and PR, then asserts the
-# framebuffer + audio FNV-1a hashes match the recorded reference values.
-# Any divergence (off-by-one CPU bug, DSP regression, timing drift) flips
-# the hash and fails CI. This is the determinism contract, enforced.
+# Two jobs:
+#
+# 1. `cargo-check` — manifest + type check. Runs unconditionally on
+#    every push/PR. Catches Cargo.toml parse errors, type errors, and
+#    warnings before the (optional) hash gate. No ROM needed.
+#
+# 2. `bench-hash-gate` — runs the native bench harness and asserts the
+#    framebuffer + audio FNV-1a hashes match the recorded references.
+#    Any divergence (off-by-one CPU bug, DSP regression, timing drift)
+#    flips the hash and fails CI. The determinism contract, enforced.
 #
 # Reference values are for SMW × 600 frames. The ROM is copyrighted, so
 # it's loaded from a base64-encoded GitHub Actions secret rather than
 # committed. To configure: encode the ROM with `base64 -i rom/smw.smc`
 # and set `SMW_ROM_B64` in repo secrets. If the secret is missing the
-# job skips with a clear message rather than failing — keeps forks green.
+# hash-gate job skips with a clear message — keeps forks green.
 
 on:
   push:
@@ -17,6 +23,28 @@ on:
   workflow_dispatch:
 
 jobs:
+  cargo-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-check-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-check-
+
+      - name: cargo check --all-targets
+        run: cargo check --all-targets --locked
+
   bench-hash-gate:
     runs-on: ubuntu-latest
     env:
