@@ -42,8 +42,6 @@ const VERSION: u8 = 1;
 #[inline] pub(crate) fn w_u32(out: &mut Vec<u8>, v: u32) { out.extend_from_slice(&v.to_le_bytes()); }
 #[inline] pub(crate) fn w_u64(out: &mut Vec<u8>, v: u64) { out.extend_from_slice(&v.to_le_bytes()); }
 #[inline] pub(crate) fn w_i16(out: &mut Vec<u8>, v: i16) { out.extend_from_slice(&v.to_le_bytes()); }
-#[inline] pub(crate) fn w_i32(out: &mut Vec<u8>, v: i32) { out.extend_from_slice(&v.to_le_bytes()); }
-#[inline] pub(crate) fn w_i64(out: &mut Vec<u8>, v: i64) { out.extend_from_slice(&v.to_le_bytes()); }
 #[inline] pub(crate) fn w_bool(out: &mut Vec<u8>, v: bool) { out.push(if v { 1 } else { 0 }); }
 pub(crate) fn w_bytes(out: &mut Vec<u8>, b: &[u8]) {
     w_u32(out, b.len() as u32);
@@ -71,8 +69,6 @@ pub(crate) fn r_u64(r: &mut &[u8]) -> Result<u64, String> {
     Ok(u64::from_le_bytes(b))
 }
 pub(crate) fn r_i16(r: &mut &[u8]) -> Result<i16, String> { r_u16(r).map(|v| v as i16) }
-pub(crate) fn r_i32(r: &mut &[u8]) -> Result<i32, String> { r_u32(r).map(|v| v as i32) }
-pub(crate) fn r_i64(r: &mut &[u8]) -> Result<i64, String> { r_u64(r).map(|v| v as i64) }
 pub(crate) fn r_bool(r: &mut &[u8]) -> Result<bool, String> { r_u8(r).map(|v| v != 0) }
 pub(crate) fn r_bytes_into(r: &mut &[u8], dst: &mut [u8]) -> Result<(), String> {
     let n = r_u32(r)? as usize;
