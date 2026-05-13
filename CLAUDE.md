@@ -151,13 +151,22 @@ in approximate priority order so you can suggest them to Nick.
 
 ### High-impact, well-bounded
 
-**T10 — Idle-loop detection in 65816** (BLOCKED in last session because the
-bench harness was uncommitted; now unblocked once you commit Phase A)
+**T10 — Idle-loop detection in 65816** (design phase complete 2026-05-13;
+implementation pending. See `docs/T10_IDLE_LOOP_DETECTION.md`.)
 - Detect tight LDA→BEQ polling loops; skip CPU cycles forward to next event
-- Reference impls: bsnes, snes9x, Mesen, ares
-- Plausible 10-100× speedup on the 61% of dispatches that are busy-waiting
-- Validate via determinism hashes — must remain `54b3eed74f9f8432` /
-  `62300ecfc4da23e0`
+- **Framing correction from prior plan**: no current SNES emulator (bsnes,
+  snes9x, Mesen2, ares) does this. snes9x had it pre-1.50 but removed it due
+  to SA-1/DSP-1 bugs. Native C++ at 3GHz doesn't need it; WASM at our pace
+  does. Useful prior art is mGBA, not SNES.
+- Tier 1 design: detect `A5 xx F0 FD` pattern only (~80 LOC), pure-memory
+  address gate via `bus.is_pure_memory()`, skip to end-of-scanline minus
+  safety margin, explicit APU `catch_up` for skipped cycles (most likely
+  failure mode if missed)
+- Behind a Cargo feature flag for the first PR
+- Validate via determinism hashes on SMW + Zelda 3 + F-Zero + Super Metroid;
+  must remain `54b3eed74f9f8432` / `62300ecfc4da23e0` for SMW
+- Expected 10-30% wall-clock win on browser bench (not 10-100× — that was
+  speculative)
 - Sibling repo `/Users/nick/git/experiments/alexar-the-kidd/alex-kidd-hack`
   has a related task (T14) that closes a 14-year-old jsSMS audio loop
 
