@@ -40,6 +40,12 @@ path = "src/bin/bench.rs"
 trace = []
 vram-trace = []
 cpu-trace = []
+# Idle-loop fast path (T10). Detects the canonical LDA→BEQ polling shape and
+# fast-forwards the CPU to the next scanline boundary. CPU semantics are
+# preserved; audio has a known residual divergence under investigation.
+# Off by default — the determinism contract on main is computed with this
+# feature disabled. See docs/T10_IDLE_LOOP_DETECTION.md.
+idle-skip = []
 
 [[bin]]
 name = "snapshot_test"

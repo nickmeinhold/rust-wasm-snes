@@ -51,6 +51,11 @@ pub struct Bus {
     /// Last CPU PC before a write (for write breakpoint logging).
     pub last_write_bank: u8,
     pub last_write_pc: u16,
+
+    /// Master-cycle deadline of the current scanline. Set by the frame loop
+    /// before each scanline's inner step loop, read by the CPU's idle-loop
+    /// fast path to bound forward skips.
+    pub current_scanline_target: u64,
 }
 
 impl Bus {
@@ -88,7 +93,29 @@ impl Bus {
             pending_dma_cycles: 0,
             last_write_bank: 0,
             last_write_pc: 0,
+            current_scanline_target: 0,
         }
+    }
+
+    /// Returns true if reads from (bank, addr) have no side effects AND the
+    /// address cannot be mutated except by NMI/IRQ/HDMA. WRAM, SRAM, and ROM
+    /// qualify; I/O registers ($2100-$5FFF) do not — many have read-clear or
+    /// read-advance behaviour ($4210 RDNMI, $2180 WMDATA, $2139 VMDATAREAD).
+    ///
+    /// Used by the CPU idle-loop fast path to decide whether the polled byte
+    /// of an LDA→BEQ spin-wait is safe to elide.
+    pub fn is_pure_memory(&self, bank: u8, addr: u16) -> bool {
+        let eb = bank & 0x7F;
+        matches!(
+            (eb, addr),
+            (0x7E, _)                                 // full WRAM
+            | (0x7F, _)                               // full WRAM (upper)
+            | (0x00..=0x3F, 0x0000..=0x1FFF)          // WRAM low mirror
+            | (0x00..=0x3F, 0x8000..=0xFFFF)          // LoROM cart
+            | (0x40..=0x6F, 0x8000..=0xFFFF)          // ROM banks $40-$6F
+            | (0x70..=0x7D, 0x0000..=0x7FFF)          // SRAM
+            | (0x70..=0x7D, 0x8000..=0xFFFF)          // ROM
+        )
     }
 
     /// Read a byte from the bus. This is the hot path for all CPU reads.

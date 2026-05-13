@@ -159,6 +159,16 @@ impl Emulator {
         self.cpu.opcode_counts.to_vec()
     }
 
+    /// Diagnostic: number of times the idle-loop fast path fired.
+    pub fn idle_skip_hits(&self) -> u64 {
+        self.cpu.idle_skip_hits
+    }
+
+    /// Diagnostic: cumulative master cycles skipped by the idle-loop fast path.
+    pub fn idle_skip_cycles(&self) -> u64 {
+        self.cpu.idle_skip_cycles
+    }
+
     /// Update the running audio hash with a slice of i16 samples.
     /// Hashes the underlying byte representation (little-endian on every
     /// target Rust+WASM supports). Equivalent to FNV-1a 64-bit applied to
@@ -225,6 +235,9 @@ impl Emulator {
             let target = self.cpu.cycles + MASTER_CYCLES_PER_SCANLINE;
             let hblank_start = self.cpu.cycles + MASTER_CYCLES_PER_SCANLINE - 68 * 4;
             self.bus.hblank = false;
+            // Publish the scanline deadline so Cpu::try_idle_skip can bound
+            // its forward skips at the granularity of scheduled events.
+            self.bus.current_scanline_target = target;
             while self.cpu.cycles < target {
                 if !self.bus.hblank && self.cpu.cycles >= hblank_start {
                     self.bus.hblank = true;

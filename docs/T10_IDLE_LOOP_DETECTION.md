@@ -1,6 +1,10 @@
 # T10 — Idle-Loop Detection for the 65816 CPU
 
-**Status:** design, not implementation
+**Status:** Tier 1 implementation behind `idle-skip` Cargo feature (default off).
+CPU semantics are correct (framebuffer hash preserved under single-skip cap);
+audio hash exhibits a residual divergence from APU chunk-size sensitivity that
+needs a separate session of investigation. See §8 "Implementation findings".
+
 **Hard constraint:** must preserve SMW × 600-frame determinism hashes
 (`final_fb_hash = 54b3eed74f9f8432`, `final_audio_hash = 62300ecfc4da23e0`)
 bit-for-bit. CI gate at `.github/workflows/bench.yml` enforces this on every push.
@@ -525,3 +529,107 @@ flag means the cost of carrying broken code is zero — it never compiles in.
    v2, and it's where IRQ-driven loops would benefit most. But it requires
    exposing the full event scheduler to `Cpu::step`, which is a bigger
    refactor. Defer until we've proven v1.
+
+---
+
+## 8. Implementation findings (2026-05-13)
+
+Tier-1 implementation landed behind the `idle-skip` Cargo feature, default off.
+The detection works as designed: 88,597 hits per 600-frame SMW run, 52% of
+total frame master cycles skipped, +11% wall-clock perf. CPU semantics are
+preserved — but audio determinism is not, even with extensive APU chunking
+compensation.
+
+### What works
+
+- **Pattern detection** — fires on the canonical `A5 xx F0 FC` shape (note:
+  the design doc had `FD` here; correct offset is `-4 = 0xFC` per the
+  emulator's `relative8` semantics in `src/cpu/addressing.rs:184`, which
+  uses PC-after-fetch as the base).
+- **Pure-memory address gate** — `Bus::is_pure_memory()` correctly rejects
+  all I/O regions (verified: setting `MIN_SKIP = u64::MAX` yields zero hits
+  and bit-identical hashes).
+- **CPU/framebuffer state preservation** — verified empirically by capping
+  total hits to one (~792 master cycles skipped): `final_fb_hash` matches
+  reference `54b3eed74f9f8432` bit-for-bit. The pre-loaded A register,
+  N/Z flags, and PC-not-advanced strategy from §4.1 step 7 reproduce the
+  unskipped state exactly.
+
+### What doesn't work yet
+
+- **Audio hash diverges from frame 1.** Even with the chunk-simulation
+  fix (replaying the skipped span as N calls of `apu.catch_up(18)` to
+  mimic the unskipped 18-master-cycle-per-step pattern), `final_audio_hash`
+  is wrong. With one capped skip and chunk sim:
+  - reference: `62300ecfc4da23e0`
+  - actual:    `cd08a0fd6e31c868`
+- **fb_hash diverges with many skips.** With the feature fully on (88K
+  hits), fb_hash also drifts to `cfcd078d948adbf7`. The path: audio drift
+  →  SPC writes to `bus.ports_to_main` shift in time → CPU reads of
+  `$2140-$2143` see different values → branches diverge → eventually a
+  PPU register write differs → framebuffer hash flips. The fb divergence
+  is downstream of the audio divergence; fixing audio fixes both.
+
+### Why naive chunk simulation isn't enough
+
+The SPC700's `Apu::run_cycles` (`src/spc700/mod.rs:281`) uses a cycle-debt
+mechanism:
+
+```rust
+self.cycle_debt += target_cycles as i64;
+while self.cycle_debt > 0 {
+    let inst = self.cpu.step(...);
+    self.cycle_debt -= inst;
+    for _ in 0..inst { /* tick timers, DSP samples */ }
+}
+```
+
+This is **not** chunk-equivalent in general. A 4-cycle SPC instruction
+runs as long as debt > 0 at instruction start. Many small calls produce
+the same total work as one big call, but the **instruction-boundary
+timing** within the SPC's run differs: when debt becomes negative after
+one inst, subsequent small calls may or may not push debt back to
+positive depending on the chunk sequence. Mathematically equivalent
+total cycles can still produce different SPC instruction interleaving,
+and the DSP samples written during `for _ in 0..inst` happen at slightly
+different SPC cycle counts.
+
+**This is the failure mode the design doc §6 risk 1 anticipated**, and
+it's deeper than off-by-one APU catch-up accounting. It's an emulation
+correctness vs. host-perf tradeoff that the existing emulator already
+makes (per the inline comment at `spc700/mod.rs:185-188`: "prevents
+overshoot amplification when catch_up is called frequently with small
+cycle counts"). Our optimization exposes it.
+
+### Possible fixes (for the next session)
+
+1. **Make run_cycles chunk-deterministic.** Eliminate `cycle_debt` and
+   instead use a precise SPC-cycle counter that runs *exactly* N cycles
+   per call (possibly mid-instruction). This is a refactor of the SPC700
+   timing model, not a small fix. Reference: bsnes's libco-based
+   coroutine scheduler, where the SPC yields after every cycle.
+2. **Match the existing chunk distribution exactly.** During a skip,
+   call `apu.catch_up` with the same sequence of values that the
+   unskipped path would have produced — not just `18 × N`, but the
+   specific sequence including the LDA-vs-BEQ alternation and any
+   timer/HDMA-induced extra catch_ups in the outer loop. Brittle.
+3. **Detect across full scanline boundaries instead.** Skip to the
+   end of the next scheduled event (NMI/IRQ/HDMA), not just the next
+   scanline. This widens the skip but doesn't help with chunking.
+4. **Accept the new hash and re-baseline.** If the audio output is
+   *semantically* correct (audio still sounds right; the divergence is
+   sub-perceptual), accept it and document the new reference hashes.
+   The PCA comparison harness in `reference/principal_component_compare.py`
+   could prove "audibly equivalent" even if bit-different.
+
+Option 4 is the most pragmatic but only works if the audio quality is
+preserved. Option 1 is the principled fix but is a multi-session refactor.
+
+### Performance achieved (feature on, hashes broken)
+
+- Native bench: 575 → 626 emulated_fps (+8.9%)
+- Frame mean: 1738 → 1597 µs (-8.1%)
+- 52% of master cycles fast-forwarded
+- 88,597 hits in 600 frames (~148 hits/frame)
+
+The win is real; the determinism contract isn't. Worth picking back up.

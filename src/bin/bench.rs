@@ -110,6 +110,15 @@ fn main() {
     //    total dispatches each consumes — answers "is the bottleneck a few
     //    hot opcodes (worth optimizing) or scattered across many (dispatch
     //    overhead is the real cost)?".
+    if emu.idle_skip_hits() > 0 {
+        eprintln!(
+            "idle_skip_hits={} idle_skip_cycles={} (share of frame time: {:.2}%)",
+            emu.idle_skip_hits(),
+            emu.idle_skip_cycles(),
+            // 600 frames × ~357k master cycles/frame ≈ 214M total master cycles for SMW NTSC.
+            (emu.idle_skip_cycles() as f64) / (600.0 * 357366.0) * 100.0,
+        );
+    }
     let counts: Vec<u64> = emu.cpu_opcode_counts();
     let total: u64 = counts.iter().sum();
     if total > 0 {

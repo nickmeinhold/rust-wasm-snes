@@ -105,6 +105,12 @@ pub struct Cpu {
     /// Per-opcode execution count. Indexed by opcode byte. Box-allocated to
     /// avoid bloating the Cpu struct (256 × u64 = 2 KiB).
     pub opcode_counts: Box<[u64; 256]>,
+
+    /// Number of times the idle-loop fast path fired this run. Diagnostic only.
+    pub idle_skip_hits: u64,
+
+    /// Cumulative master cycles skipped by the idle-loop fast path. Diagnostic.
+    pub idle_skip_cycles: u64,
 }
 
 impl Cpu {
@@ -127,7 +133,133 @@ impl Cpu {
             waiting: false,
             trace: false,
             opcode_counts: Box::new([0u64; 256]),
+            idle_skip_hits: 0,
+            idle_skip_cycles: 0,
         }
+    }
+
+    /// Tier-1 idle-loop fast path. Detects the canonical 65816 polling shape
+    ///
+    /// ```text
+    ///   loop:  LDA $xx    ; A5 xx
+    ///          BEQ loop   ; F0 FC   (offset -4 lands on the LDA)
+    /// ```
+    ///
+    /// and — if the polled address is in pure memory (WRAM / SRAM / ROM only)
+    /// — advances `cpu.cycles` to just before the next scanline boundary,
+    /// leaving PC at the LDA so the final one or two iterations execute
+    /// normally and any pending interrupt fires at the correct cycle.
+    ///
+    /// Returns `Some(skip_cycles)` on success; the caller adds those cycles
+    /// to `cpu.cycles` and gives them to `apu.catch_up`. Returns `None` if
+    /// any precondition fails; the caller falls through to normal dispatch.
+    ///
+    /// **Determinism:** see `docs/T10_IDLE_LOOP_DETECTION.md` §3 for the
+    /// full argument. CPU/framebuffer state IS preserved by this path
+    /// (verified by one-skip cap experiment: fb hash bit-identical to
+    /// reference). The audio hash exhibits a residual divergence even
+    /// when simulating the unskipped catch_up chunk pattern — see PR for
+    /// the empirical data and follow-up. Gated behind the `idle-skip`
+    /// Cargo feature, default off, until audio determinism is resolved.
+    #[cfg(feature = "idle-skip")]
+    fn try_idle_skip(&mut self, bus: &mut Bus) -> Option<u64> {
+        // Master-cycle headroom we leave before the scanline boundary. An
+        // LDA dp + BEQ taken pair costs about 36 master cycles in 8-bit
+        // mode (3 CPU cycles each × 6 master/CPU); we want enough headroom
+        // that two full iterations can complete before the inner while
+        // loop exits, so the per-scanline overshoot pattern stays close to
+        // what the unskipped path produces.
+        const SAFETY_MARGIN: u64 = 80;
+        const MIN_SKIP: u64 = 150;
+        // Master cycles per CPU step we simulate during the skip. Matches the
+        // dominant per-step elapsed in the unskipped path: LDA dp and BEQ taken
+        // are each 3 CPU cycles × 6 master = 18. Crucial for audio determinism:
+        // the SPC700 runs in chunked cycle-debt mode and is sensitive to the
+        // chunk size delivered to `apu.catch_up`. Empirically, calling
+        // catch_up(18) N times during a skip does NOT exactly reproduce the
+        // unskipped audio hash — there is a residual divergence the
+        // design doc flagged as "the most likely failure mode" (§6 risk 1).
+        // Resolving that is a multi-session task; this implementation lives
+        // behind the `idle-skip` Cargo feature, default off, so the
+        // determinism contract stays green on `main`.
+        const SIMULATED_STEP_CYCLES: u32 = 18;
+
+        // Tier 1 requires 8-bit accumulator mode (M=1). SMW polls in M=1.
+        // 16-bit polls are a Tier 2 follow-up.
+        if !self.p.m {
+            return None;
+        }
+
+        // Peek the four-byte pattern at PBR:PC. bus.read takes &mut because
+        // some addresses have read side effects; the instruction stream is
+        // ROM/WRAM in practice so these reads are pure, but we don't rely
+        // on that — we only commit to the skip after the pure-memory check
+        // on the polled address.
+        let pc = self.pc;
+        if bus.read(self.pbr, pc) != 0xA5 {
+            return None;
+        }
+        let dp_offset = bus.read(self.pbr, pc.wrapping_add(1));
+        if bus.read(self.pbr, pc.wrapping_add(2)) != 0xF0 {
+            return None;
+        }
+        if bus.read(self.pbr, pc.wrapping_add(3)) != 0xFC {
+            return None;
+        }
+
+        // Direct-page LDA reads from bank $00 at (DP + dp_offset).
+        let polled_addr = self.dp.wrapping_add(dp_offset as u16);
+        if !bus.is_pure_memory(0x00, polled_addr) {
+            return None;
+        }
+
+        // Compute the skip budget. Saturating arithmetic guards against
+        // current_scanline_target ever being unset (== 0) or behind cycles.
+        let target = bus.current_scanline_target;
+        let budget = target.saturating_sub(self.cycles);
+        if budget <= SAFETY_MARGIN {
+            return None;
+        }
+        let skip = budget - SAFETY_MARGIN;
+        if skip < MIN_SKIP {
+            return None;
+        }
+
+        // Project the post-skip A and N/Z flags. After the skip, the next
+        // real LDA iteration would read whatever the polled byte holds
+        // right now (since pure-memory means nothing has mutated it during
+        // the skipped span). Pre-applying the load keeps the visible CPU
+        // state identical to what the unskipped path produces.
+        let byte = bus.read(0x00, polled_addr);
+        self.a = (self.a & 0xFF00) | byte as u16;
+        self.p.z = byte == 0;
+        self.p.n = (byte & 0x80) != 0;
+
+        // Drive the APU using the same chunk distribution it would receive
+        // from the unskipped loop: a stream of `SIMULATED_STEP_CYCLES`-sized
+        // catch_ups, with the remainder as the final call. We do this here
+        // and return 0 from step() so the outer frame loop's own catch_up
+        // for `elapsed` is a no-op — otherwise we'd double-credit cycles.
+        let mut remaining = skip;
+        while remaining >= SIMULATED_STEP_CYCLES as u64 {
+            bus.apu.catch_up(SIMULATED_STEP_CYCLES);
+            remaining -= SIMULATED_STEP_CYCLES as u64;
+        }
+        if remaining > 0 {
+            bus.apu.catch_up(remaining as u32);
+        }
+        self.cycles += skip;
+
+        // PC is intentionally NOT advanced — we resume at the LDA. The
+        // remaining few iterations cost ~30-60 master cycles total and
+        // ensure the interrupt-pending check sees the same boundary it
+        // would have in the unskipped run.
+        self.idle_skip_hits += 1;
+        self.idle_skip_cycles += skip;
+        // Return 0: cpu.cycles and apu.catch_up are both already accounted
+        // for above. Outer loop will do `cpu.cycles += 0` and
+        // `apu.catch_up(0)`, both no-ops.
+        Some(0)
     }
 
     /// Load the reset vector and initialize CPU state.
@@ -177,6 +309,18 @@ impl Cpu {
             self.irq_pending = false;
             self.handle_irq(bus);
             return 7 * 6;
+        }
+
+        // Idle-loop fast path (T10). Gated behind the `idle-skip` Cargo
+        // feature — off by default. CPU semantics are correct under this
+        // path (framebuffer hash preserved), but the audio hash exhibits a
+        // residual divergence from APU chunk-size sensitivity (the
+        // SPC700's cycle_debt accounting is not perfectly chunk-equivalent).
+        // See `docs/T10_IDLE_LOOP_DETECTION.md` for the design and the
+        // follow-up section in the PR for the empirical divergence data.
+        #[cfg(feature = "idle-skip")]
+        if let Some(skip) = self.try_idle_skip(bus) {
+            return skip;
         }
 
         // Feature-gated CPU execution trace (compile-time, before fetch)
