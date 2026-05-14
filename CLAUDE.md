@@ -12,77 +12,118 @@
 
 ## What this project is
 
-A Rust SNES emulator targeting Zelda 3 (LTTP), compiled to WASM, runs in the
-browser. See `README.md` for the project's framing — particularly the
-audio-verified-against-reference and trace-oracle-debugging sections.
+A Rust SNES emulator targeting Zelda 3 (LTTP), SMW, and a growing list of
+other titles. Compiled to WASM, runs in the browser. See `README.md` for the
+project framing — particularly the audio-verified-against-reference and
+trace-oracle-debugging sections.
 
 This file (`CLAUDE.md`) is purely for **session continuity**. It tracks what's
 in flight, not what the project *is*.
 
 ---
 
-## State of play (as of 2026-05-01)
+## State of play (as of 2026-05-14)
 
-### What's freshly built but uncommitted on `main`
+### What's shipped on `main`
 
-A complete benchmarking + determinism harness, plus three shipped Phase A
-optimizations. **All of this is currently uncommitted** in the working tree:
+Phase A foundation is done. Phase B Step 1 is done. Most of the infrastructure
+the previous prior-session session listed as "uncommitted" is now committed and
+hash-validated.
+
+Recent main log:
 
 ```
-M  Cargo.toml          [[bin]] bench entry
-M  src/cpu/mod.rs      opcode_counts: Box<[u64; 256]>; println→eprintln
-M  src/lib.rs          zero-copy fb + audio APIs, audio_hash, run_frame_inner refactor
-M  src/main.rs         (small)
-M  src/rom.rs          (small)
-M  web/index.html      production zero-copy fb + audio
-M  web/serve.py        COOP/COEP headers (preparing for SAB)
-?? .cargo/             config.toml — wasm32 target-feature=+simd128
-?? PHASE_B_PLAN.md     integration spec for Worker + SAB + AudioWorklet
-?? bench/              package.json, bench-cli.js, compare.js, baseline JSONs
-?? src/bin/bench.rs    native bench: frame timing + opcode histogram + hashes
-?? web/bench.html      browser bench page (copy + zero-copy paths)
+61d7f10  feat(cpu): T10 idle-loop fast path behind `idle-skip` feature (#16)
+c64abab  docs(T10): idle-loop detection design + corrected framing (#15)
+2a26710  ci: add cargo-check job that runs without ROM secret (#14)
+c1f2381  fix: remove duplicate [[bin]] bench from Cargo.toml + unused helpers (#13)
+f427744  feat(web): Phase B Step 1 — Web Worker emulator scaffold (#7)
+cf9a4e3  ci(bench): determinism hash gate + opcode counters (#9)
+73276d0  docs(bench): README for the bench harness (#8)
+a0af77c  feat(snapshot): save-state support (#10)
+8ddd1b3  Merge Phase A foundation (#11)
 ```
 
-**RECOMMENDED FIRST ACTION**: ask Nick if he wants to commit this Phase A work
-to `main` before starting new work. Without committing, every git worktree
-created from `main` will lack the bench harness — which is what blocked one of
-the parallel agents in the last session (see Worktree State below).
+The Phase A foundation merge (`#11`) carries five story-driven commits:
+gitignore noise, bench harness + hash contract, zero-copy fb/audio + SIMD +
+opcode counters, web bench/compare pages + COOP/COEP, docs.
 
-A clean conventional-commit history would be roughly:
+### The determinism contract (sacred)
 
-1. `feat(bench): add native + browser bench harness with determinism hashes`
-2. `perf(emulator): zero-copy framebuffer via memory view`
-3. `perf(build): enable WASM SIMD via target-feature`
-4. `perf(emulator): zero-copy audio samples via memory view`
-5. `chore(server): COOP/COEP headers for SharedArrayBuffer support`
-6. `feat(cpu): per-opcode execution counter for hot-path profiling`
-7. `docs: PHASE_B_PLAN integration spec`
-
-### The determinism contract
-
-The most important infrastructure piece. Both the native bench
-(`cargo run --release --bin bench rom/smw.smc`) and the browser bench
-(`cd bench && node bench-cli.js --frames 600 --label foo --path zero-copy`)
-emit a JSON object containing:
-
-- `final_fb_hash` — FNV-1a 64-bit hash of the framebuffer after frame 600
-- `final_audio_hash` — FNV-1a 64-bit hash of all audio samples consumed
-
-For SMW (`rom/smw.smc`) × 600 frames at default reset state:
+For SMW × 600 frames at default reset state:
 
 | | |
 |---|---|
-| FB hash | `54b3eed74f9f8432` |
-| Audio hash | `62300ecfc4da23e0` |
+| `final_fb_hash` | `54b3eed74f9f8432` |
+| `final_audio_hash` | `62300ecfc4da23e0` |
 
+Bit-identical across native (x86_64) and browser (wasm32 in Chromium).
 **Any code change that doesn't intentionally alter emulator semantics MUST
-preserve both hashes.** The compare tool (`bench/compare.js`) prints a
-clear ✓ / ✗ for each. Use this as a circuit breaker.
+preserve both hashes.** `bench/compare.js` prints clear ✓/✗ for each.
 
-The hashes are bit-identical across native (x86_64) and browser (wasm32 in
-Chromium). Cross-platform determinism is part of the contract.
+Validate locally:
+```bash
+cargo run --release --bin bench rom/smw.smc 2>&1 | grep hash
+```
 
-### Phase A perf wins shipped (in main working tree, uncommitted)
+### CI status (be aware: gate is partially skipped)
+
+`.github/workflows/bench.yml` runs two jobs:
+
+1. **`cargo-check`** (added in #14) — runs unconditionally on every push/PR.
+   `cargo check --all-targets --locked`. Catches manifest errors, type errors,
+   lockfile drift. This job is actively enforcing.
+
+2. **`bench-hash-gate`** — runs the native bench against SMW and asserts the
+   contract hashes. **Currently always skips** because the `SMW_ROM_B64` secret
+   isn't set. (Tried setting it — 422 "Value is too large", GH Actions secrets
+   max at 48KB; SMW base64 is ~683KB.) So the contract is enforced locally
+   only. See `docs/OPEN_TASKS.md` for candidate fixes.
+
+### Browser Phase B prerequisite stack (verified 2026-05-13)
+
+`web/serve.py` on port 8090 with COOP/COEP headers gives:
+- `crossOriginIsolated === true` ✓
+- `SharedArrayBuffer` available ✓
+- `Atomics` available ✓
+
+Smoke-tested via headless Chromium against `web/index-phase-b.html`:
+emulator runs in the worker, frame counter advances, ROM loaded ("SUPER
+MARIOWORLD"), zero page errors. PR #7's worker scaffold genuinely works —
+not just hash-equivalent.
+
+**Watch out**: if `lsof -i :8090` shows a non-`serve.py` Python process, kill
+it. A `python -m http.server` (without COOP/COEP) silently disables SAB for
+browser sessions. Task in `docs/OPEN_TASKS.md` to make `serve.py` warn about
+this.
+
+### T10 idle-loop detection — landed behind a feature flag
+
+`docs/T10_IDLE_LOOP_DETECTION.md` has the full design + implementation
+findings. Status:
+
+- **Tier 1 implementation in tree behind `idle-skip` Cargo feature, default OFF.**
+- **CPU semantics correct.** With feature on + capped to one skip, fb_hash is
+  bit-identical to reference. Verified empirically.
+- **Audio diverges.** Even with chunk-simulated catch_up, audio hash drifts.
+  Root cause: `Apu::run_cycles` cycle-debt mechanism (`src/spc700/mod.rs:281`)
+  is not chunk-equivalent — different chunk sequences delivering identical
+  total cycles produce different SPC instruction-boundary timing.
+- **Framing correction from the 2026-05-01 plan:** no SNES emulator currently
+  does idle-loop detection (verified by direct grep across bsnes, snes9x,
+  Mesen2, ares). snes9x had it pre-1.50 but tore it out due to SA-1/DSP-1 bugs.
+  The useful prior art is mGBA, not SNES.
+- **Perf when on:** native bench 575 → 626 emulated_fps (+8.9%), 88K hits
+  per 600-frame run, 52% of master cycles fast-forwarded.
+- **Bonus correction to the design doc:** Tier 1 pattern is `A5 xx F0 FC`
+  (offset −4), not `F0 FD` (−3) as originally written. The emulator's
+  `relative8` in `addressing.rs:184` uses PC-after-fetch as the branch base.
+
+Four candidate fix paths in `docs/T10_IDLE_LOOP_DETECTION.md` §8 (and
+`docs/OPEN_TASKS.md`). T13 (AudioWorklet) likely fixes the chunking blocker
+as a side effect.
+
+### Phase A perf wins (still valid)
 
 Cumulative vs original baseline, browser bench × 600 frames × SMW:
 
@@ -92,113 +133,56 @@ Cumulative vs original baseline, browser bench × 600 frames × SMW:
 | Frame P50 | 2285 µs | 2140 µs | -6.3% |
 | Frame max (tail) | **7255 µs** | **3680 µs** | **-49.3%** |
 | Emulated FPS | 536.2 | 566.6 | +5.7% |
-| WASM size | 109 KB | 125 KB | +14% (SIMD code) |
-| Cold load | 14 ms | 22 ms | +56% (one-time cost) |
+| WASM size | 109 KB | 125 KB | +14% (SIMD) |
 
-Tail latency is the headline. Mean improvement is real but modest; the felt
-experience is dominated by the elimination of GC-pause stutters.
+Tail latency is the headline — the felt experience is dominated by the
+elimination of GC-pause stutters.
 
-### Profiling finding (the actual punch line)
+### Profiling finding (still the punch line)
 
-Running the native bench dumps an opcode histogram to stderr. For SMW:
+Native bench dumps a CPU opcode histogram for SMW:
 
 ```
-CPU opcode histogram (top 5):
-  rank  op   name      count        share   cumulative
-     1  F0   BEQ        3,455,231   30.56%   30.56%   ← polling loop
-     2  A5   LDA        3,454,342   30.55%   61.11%   ← polling loop
-     3  D0   BNE          691,442    6.12%   67.23%
-     4  CD   CMP          447,760    3.96%   71.19%
-     5  CA   DEX          185,239    1.64%   72.83%
+rank  op   name      count        share   cumulative
+   1  F0   BEQ        3,455,231   30.56%   30.56%
+   2  A5   LDA        3,454,342   30.55%   61.11%
 ```
 
-**Two opcodes account for 61% of all CPU dispatches in a tight LDA→BEQ
-busy-wait loop.** This is a much bigger optimization opportunity than
-anything Phase A touched. See task #10 below — idle-loop detection.
-
-Real emulators (bsnes, snes9x, Mesen, ares) all do this. Plausible 10-100×
-speedup on the polling fraction alone.
+Two opcodes = 61% of dispatches in a tight LDA→BEQ polling loop. T10 attacks
+this; see status above.
 
 ---
 
-## Worktree state (parallel agent results from 2026-05-01)
+## Repo state
 
-```
-git worktree list:
-  rust-wasm-snes/                       main                       ← uncommitted Phase A work
-  rust-wasm-snes-task11/                task11-worker-scaffold     ← Phase B Step 1: Web Worker scaffold
-  rust-wasm-snes-task16/                task16-bench-readme        ← bench/README.md (270 lines)
-  rust-wasm-snes-task17/                task17-ci-hash-gate        ← .github/workflows/bench.yml
-  rust-wasm-snes-task18/                task18-save-states         ← src/snapshot.rs + bin/snapshot_test.rs
-```
-
-All four worktree branches are at commit `aef377b` (the same commit as `main`)
-because nothing has been committed yet. The agents did their work but couldn't
-commit cleanly without the Phase A files being part of the base commit.
-
-**Suggested merge order** once Phase A is committed to main:
-1. `task18-save-states` (most validated; round-trip preserves FB hash)
-2. `task16-bench-readme` (docs only, low risk)
-3. `task17-ci-hash-gate` (CI workflow; enforces determinism contract on every push)
-4. `task11-worker-scaffold` (Phase B foundation; should be tested manually first)
+- Single worktree at `rust-wasm-snes/` on `main`. No `task*` worktrees.
+- Local branches: just `main` (and `fix/irq-hblank-gaussian` pre-existing).
+- Remote branches: same.
+- `bench/node_modules/` is vendored in main history (~3 MB Playwright). See
+  `docs/OPEN_TASKS.md` for the keep-vs-gitignore decision.
 
 ---
 
 ## Pending tasks
 
-These were tracked in the previous session's task list. They're listed here
-in approximate priority order so you can suggest them to Nick.
+**Full list lives in `docs/OPEN_TASKS.md`** — the in-session `TaskCreate` queue
+is session-scoped and won't survive into the next session. The markdown file
+is what survives.
 
-### High-impact, well-bounded
+Highlights for prioritisation:
 
-**T10 — Idle-loop detection in 65816** (design phase complete 2026-05-13;
-implementation pending. See `docs/T10_IDLE_LOOP_DETECTION.md`.)
-- Detect tight LDA→BEQ polling loops; skip CPU cycles forward to next event
-- **Framing correction from prior plan**: no current SNES emulator (bsnes,
-  snes9x, Mesen2, ares) does this. snes9x had it pre-1.50 but removed it due
-  to SA-1/DSP-1 bugs. Native C++ at 3GHz doesn't need it; WASM at our pace
-  does. Useful prior art is mGBA, not SNES.
-- Tier 1 design: detect `A5 xx F0 FD` pattern only (~80 LOC), pure-memory
-  address gate via `bus.is_pure_memory()`, skip to end-of-scanline minus
-  safety margin, explicit APU `catch_up` for skipped cycles (most likely
-  failure mode if missed)
-- Behind a Cargo feature flag for the first PR
-- Validate via determinism hashes on SMW + Zelda 3 + F-Zero + Super Metroid;
-  must remain `54b3eed74f9f8432` / `62300ecfc4da23e0` for SMW
-- Expected 10-30% wall-clock win on browser bench (not 10-100× — that was
-  speculative)
-- Sibling repo `/Users/nick/git/experiments/alexar-the-kidd/alex-kidd-hack`
-  has a related task (T14) that closes a 14-year-old jsSMS audio loop
+- **T13 — AudioWorklet** is the headline fix per the original project
+  framing ("audio is fucked up"). It depends on T12 and also likely fixes
+  the SPC chunking blocker that gates default-on T10. Natural next target.
+- **T12 — SharedArrayBuffer for framebuffer** — Phase B Step 2. Unblocked
+  by the verified browser prerequisite stack.
+- **T10 fix (refactor `run_cycles`)** — principled fix to the chunking issue;
+  multi-session. T10 fix alt (PCA re-baseline) is the pragmatic shortcut.
+- **Playwright smoke test as a CI job** — would catch worker/SAB regressions
+  the hash gate can't see.
 
-**T14 — Apply ring-buffer + AudioWorklet fix to alex-kidd-hack** (in progress
-on branch `alex-kidd-audio-fix` in alexar-the-kidd repo)
-- Agent rewrote `writeAudio()` in `alex-kidd-hack/src/ui.js` (~95 lines)
-- Server running on http://localhost:8088 last we checked; needs subjective
-  audio verification by Nick (open `/alexar.html`, Start, Enter, listen)
-- Honors jsSMS Issue #1 from 2012
-
-### Phase B — architectural step-change (sequential)
-
-**T11 → T12 → T13 → T15** — see `PHASE_B_PLAN.md` for the full integration spec
-- T11: Worker scaffold (DONE in worktree task11-worker-scaffold; visual test pending)
-- T12: SharedArrayBuffer for framebuffer (depends on T11)
-- T13: AudioWorklet + audio ring SAB (depends on T12) — **the fix that
-  addresses the original "audio is fucked up" question**
-- T15 (optional): OffscreenCanvas — paint in Worker thread
-
-### Infrastructure
-
-**T16 — Document the bench harness** (DONE in worktree task16-bench-readme,
-270-line `bench/README.md`)
-
-**T17 — CI hash gate** (DONE in worktree task17-ci-hash-gate, blocked on
-Phase A being committed; agent flagged this explicitly)
-
-### Future enhancement
-
-**T18 — Save states via WASM linear memory snapshot** (DONE in worktree
-task18-save-states; ~484KB snapshot format, snapshot+restore validated
-to preserve FB hash on both SMW and Zelda 3)
+Three policy decisions are also parked in `OPEN_TASKS.md`: bench/node_modules,
+CLAUDE.md public/local, admin-bypass-as-default. Nick's calls; not technical.
 
 ---
 
@@ -206,39 +190,43 @@ to preserve FB hash on both SMW and Zelda 3)
 
 ```bash
 # Native (fast, no browser)
-cargo build --release --bin bench
-./target/release/bench --frames 600 rom/smw.smc 2>&1 | tail -5
+cargo run --release --bin bench rom/smw.smc 2>&1 | tail -5
 
-# Browser (slower; needs WASM rebuild)
+# Browser (slower; needs WASM rebuild + serve.py running)
 wasm-pack build --target web
+python3 web/serve.py &        # NOT `python -m http.server` — must be serve.py
 cd bench && node bench-cli.js --frames 600 --label foo --path zero-copy > foo.json
 node compare.js baseline-with-audio-browser.json foo.json
 ```
 
 If hash check shows `✓ framebuffer hash UNCHANGED` AND `✓ audio hash UNCHANGED`,
 your change is semantics-preserving. If either shows `✗`, either it's an
-intentional behavioral fix (rare) or a regression (much more common — investigate).
+intentional behavioral fix (rare) or a regression (much more common).
+
+If you're touching Phase B browser code: confirm `crossOriginIsolated === true`
+in DevTools before you blame the worker code.
 
 ---
 
-## Notes on prior session character
+## How sessions tend to run on this project
 
-- Nick was excited and energetic in the prior session — direct ("let's
-  goooooo"), comfortable pushing back on framing, valued rigor + measurement
-- Profile mismatch caught a real config bug: `web/rom/zelda3.smc` is a
-  symlink to `../../rom/smw.smc`, so the project name doesn't match what the
-  browser actually loads. Bench uses SMW for both native and browser to keep
-  things apples-to-apples.
-- The session pattern that worked well: pushback on flawed framing, scope
-  honestly, build measurement infrastructure first, then iterate optimizations
-  with the hash as a circuit breaker.
+- Nick has been comfortable running long autonomous sessions (e.g. 2026-05-12→13,
+  9 PRs merged via admin-bypass). Whether that's the default going forward is a
+  decision parked in `docs/OPEN_TASKS.md`.
+- Bench hashes as a circuit breaker is the load-bearing safety net. Trust it
+  more than you trust the optimization you just wrote.
+- The hardest bugs in this codebase historically aren't found by reading code
+  — they're found by diffing execution traces against Mesen2. `cargo build
+  --features trace` plus `reference/diff_trace.py` is the workflow.
 
 ---
 
 ## When in doubt
 
 - Read `PHASE_B_PLAN.md` for the architectural target
-- Read `bench/README.md` (after Phase A is committed) for the harness
+- Read `bench/README.md` for the harness
+- Read `docs/T10_IDLE_LOOP_DETECTION.md` for the idle-loop work
+- Read `docs/OPEN_TASKS.md` for the prioritised queue
 - Run the bench (`cargo run --release --bin bench rom/smw.smc`) — it tells you
   what state the emulator is in via the histogram + hashes
 - The reference values for SMW × 600 frames are sacred: `54b3eed74f9f8432`

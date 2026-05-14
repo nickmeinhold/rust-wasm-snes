@@ -77,20 +77,53 @@ The 65C816 main CPU went through the same process across 100,000-instruction com
 | Super Mario Kart | Black screen — needs DSP-1 coprocessor |
 | Chrono Trigger | Needs HiROM support |
 
+## Determinism contract
+
+For SMW × 600 frames at default reset state, the framebuffer + audio hashes are
+locked:
+
+| | |
+|---|---|
+| `final_fb_hash` | `54b3eed74f9f8432` |
+| `final_audio_hash` | `62300ecfc4da23e0` |
+
+These are bit-identical across native (x86_64) and browser (wasm32 in
+Chromium). Any change that flips a hash is by definition a semantic change.
+The `bench/` harness produces these on every run; `bench/compare.js` prints ✓/✗.
+CI (`.github/workflows/bench.yml`) enforces both on every push — see
+`bench/README.md` for the harness, `docs/T10_IDLE_LOOP_DETECTION.md` for an
+example of how the contract caught a real regression mid-optimization.
+
+## Save states
+
+`src/snapshot.rs` serializes full emulator state (CPU + bus + PPU + APU + SRAM)
+to a length-prefixed binary blob, ~484 KB per snapshot. Hand-rolled little-endian
+format, no serde dependency. Magic + version checked on restore. Round-trip
+determinism validated by `cargo run --bin snapshot_test`.
+
 ## Build
 
 ```bash
-# Native (debug tooling, headless ROM runners, audio comparison)
+# Native (debug tooling, headless ROM runners, audio comparison, bench)
 cargo build --release
+cargo run --release --bin bench rom/smw.smc
 cargo run --bin debug_tm -- path/to/rom.smc
 
 # WebAssembly (browser)
-wasm-pack build --target web --out-dir web/pkg
-cd web && python3 serve.py
-# open http://localhost:8000
+wasm-pack build --target web
+python3 web/serve.py
+# open http://localhost:8090
+
+# Phase B worker scaffold (off-main-thread emulation; experimental)
+# open http://localhost:8090/index-phase-b.html — requires the COOP/COEP headers
+# that serve.py adds; a plain `python -m http.server` will silently disable SAB
 
 # With execution tracing (for debugging against a reference emulator)
 cargo build --release --features trace
+
+# With the experimental idle-loop optimization (default off; CPU semantics correct
+# but audio diverges — see docs/T10_IDLE_LOOP_DETECTION.md §8)
+cargo build --release --features idle-skip
 ```
 
 ## Reference tooling
