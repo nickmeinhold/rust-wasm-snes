@@ -508,11 +508,20 @@ impl Bus {
 
     /// Execute HDMA transfers for one scanline.
     /// Called at the start of each visible scanline (0-224).
+    ///
+    /// NOTE: This currently runs AFTER the end-of-scanline APU flush in
+    /// run_frame_inner(), so the sync_apu() call below always sees delta=0
+    /// and is effectively a no-op. On real hardware, HDMA runs during H-blank
+    /// at the START of a scanline (before CPU execution), not after.
+    /// Moving HDMA to run before the CPU step loop would make this pre-sync
+    /// meaningful and improve timing accuracy for games that use HDMA to
+    /// write APU ports.
     pub fn hdma_run_scanline(&mut self) {
         if self.hdmaen == 0 { return; }
         // Flush pending APU cycles before HDMA transfers begin.
         // HDMA runs during H-blank; the APU should be caught up to this
         // point so any HDMA writes to APU ports see correct state.
+        // (Currently a no-op — see doc comment above.)
         self.sync_apu();
 
         for ch in 0..8u8 {

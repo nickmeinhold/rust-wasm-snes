@@ -476,9 +476,8 @@ fn read_bus(r: &mut &[u8], bus: &mut Bus) -> Result<(), String> {
     bus.last_write_bank = r_u8(r)?;
     bus.last_write_pc = r_u16(r)?;
     // master_clock and last_apu_sync are transient — not persisted.
-    // They'll be reset at the next scanline boundary.
-    bus.master_clock = 0;
-    bus.last_apu_sync = 0;
+    // Initialized to cpu.cycles in restore_state() (not here, since we
+    // don't have access to cpu.cycles in read_bus).
 
     read_ppu(r, &mut bus.ppu)?;
     read_dma(r, &mut bus.dma)?;
@@ -525,6 +524,11 @@ pub fn restore_state(
     let mut r: &[u8] = &bytes[9..];
     read_cpu(&mut r, cpu)?;
     read_bus(&mut r, bus)?;
+    // Initialize transient JIT sync fields to cpu.cycles (not 0) to prevent
+    // a latent over-credit bug if any caller accesses APU ports between
+    // restore_state and the first scanline's reset of these fields.
+    bus.master_clock = cpu.cycles;
+    bus.last_apu_sync = cpu.cycles;
     *frame_count = r_u64(&mut r)?;
     Ok(())
 }

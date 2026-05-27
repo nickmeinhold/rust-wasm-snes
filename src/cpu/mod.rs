@@ -256,6 +256,12 @@ impl Cpu {
             // We can't undo the catch_up, but we stop skipping immediately
             // so the CPU resumes normal execution and reads the port.
             // The skip up to this point is already committed.
+            //
+            // TODO(T10): This is the hook point for subdivided skip. A future
+            // refinement could cap the skip to the SPC instruction boundary
+            // where the port write occurred, reducing the window where the
+            // CPU misses a handshake. For now, the skip is committed in full
+            // and the CPU resumes normal execution on the next instruction.
         }
 
         // PC is intentionally NOT advanced — we resume at the LDA. The

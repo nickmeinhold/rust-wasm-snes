@@ -357,9 +357,11 @@ impl Apu {
     pub fn catch_up(&mut self, master_cycles: u32) {
         // SPC700 clock = master clock / 21 (approximately).
         // Use fixed-point: accumulate master cycles, divide by 21.
-        self.cycle_frac += master_cycles;
-        let spc_cycles = self.cycle_frac / 21;
-        self.cycle_frac %= 21;
+        // Use u64 intermediate to prevent theoretical u32 overflow if
+        // master_cycles is ever large (e.g., bulk idle-skip catch_up).
+        let acc = self.cycle_frac as u64 + master_cycles as u64;
+        let spc_cycles = (acc / 21) as u32;
+        self.cycle_frac = (acc % 21) as u32;
         if spc_cycles > 0 {
             self.run_cycles(spc_cycles);
         }
