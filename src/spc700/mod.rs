@@ -54,6 +54,10 @@ pub struct ApuBus {
     /// APU writes a port during a bulk catch_up, the idle-skip should bail
     /// because the CPU would normally read that port between iterations.
     pub ports_written_during_run: bool,
+    /// When true, `run_cycles` breaks out of its instruction loop as soon as
+    /// `ports_written_during_run` flips to true. Only set by the idle-skip
+    /// path — normal APU execution leaves this false.
+    pub break_on_port_write: bool,
 }
 
 impl ApuBus {
@@ -66,6 +70,7 @@ impl ApuBus {
             ports_to_main: [0xAA, 0xBB, 0, 0],
             rom_enabled: true,
             ports_written_during_run: false,
+            break_on_port_write: false,
         }
     }
 
@@ -301,6 +306,13 @@ impl Apu {
         self.cycle_target += target_cycles as u64;
 
         while self.cycles < self.cycle_target {
+            // Idle-skip early exit: if the APU wrote to a port and the caller
+            // requested interruptible execution, stop immediately so the CPU
+            // can observe the port write at the right cycle boundary.
+            if self.bus.break_on_port_write && self.bus.ports_written_during_run {
+                break;
+            }
+
             // Execute one SPC700 instruction (each takes multiple cycles).
             let inst_cycles = if !self.cpu.halted {
                 self.cpu.step(&mut self.bus) as u64
@@ -363,6 +375,14 @@ impl Apu {
         if spc_cycles > 0 {
             self.run_cycles(spc_cycles);
         }
+    }
+
+    /// Reset the cycle target to match actual progress after an early exit
+    /// from `run_cycles` (e.g., due to `break_on_port_write`). Without this,
+    /// the unexecuted gap between `cycles` and `cycle_target` would
+    /// burst-execute on the next `run_cycles` call, corrupting timing.
+    pub fn reset_target_to_current(&mut self) {
+        self.cycle_target = self.cycles;
     }
 
     /// Main CPU reads from $2140-$2143.

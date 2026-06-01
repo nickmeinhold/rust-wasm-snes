@@ -99,13 +99,15 @@ class SNESAudioProcessor extends AudioWorkletProcessor {
 
                 outL[i] = Math.max(-1, Math.min(1, (l0 + frac * (l1 - l0)) * this.gain));
                 outR[i] = Math.max(-1, Math.min(1, (r0 + frac * (r1 - r0)) * this.gain));
+                this.resamplePos += ratio;
             } else {
-                // Underrun: output silence
+                // Underrun: output silence, do NOT advance resamplePos.
+                // Advancing past valid data causes the read pointer to lap
+                // the write pointer — the ring then reports its entire
+                // capacity as "available", replaying stale audio garbage.
                 outL[i] = 0;
                 outR[i] = 0;
             }
-
-            this.resamplePos += ratio;
         }
 
         // Advance read position by the number of source frames consumed

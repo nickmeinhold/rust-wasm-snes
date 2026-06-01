@@ -235,28 +235,32 @@ impl Cpu {
         self.p.z = byte == 0;
         self.p.n = (byte & 0x80) != 0;
 
-        // Drive the APU for the skipped cycles. catch_up is chunk-insensitive
-        // (absolute cycle_target, not relative debt) so a single call produces
-        // identical results to many small calls (distributive law holds).
-        //
-        // Check if the APU wrote to its output ports during the skip — if so,
-        // the CPU would normally read those ports between loop iterations
-        // (handshake protocol), and skipping those reads may corrupt comms.
+        // Drive the APU for the skipped cycles with early-exit on port write.
+        // If the APU writes to $F4-$F7 during the bulk skip, run_cycles breaks
+        // immediately so we don't advance the CPU past a handshake boundary.
+        let apu_cycles_before = bus.apu.cycles;
         bus.apu.bus.ports_written_during_run = false;
+        bus.apu.bus.break_on_port_write = true;
         bus.apu.catch_up(skip as u32);
-        self.cycles += skip;
+        bus.apu.bus.break_on_port_write = false;
+
+        let actual_skip = if bus.apu.bus.ports_written_during_run {
+            // APU broke out early — credit only the cycles it actually ran.
+            // Rewind cycle_target so the unexecuted gap doesn't burst-execute
+            // on the next sync (which would corrupt DSP sample timing).
+            bus.apu.reset_target_to_current();
+            let spc_ran = bus.apu.cycles - apu_cycles_before;
+            // Convert SPC cycles back to approximate master cycles.
+            (spc_ran * 21).min(skip)
+        } else {
+            skip
+        };
+
+        self.cycles += actual_skip;
         // Update last_apu_sync to match the new master_clock that the frame
         // loop will set (= cpu.cycles after this return). Without this,
         // sync_apu() would see a delta of `skip` and double-credit the APU.
         bus.last_apu_sync = self.cycles;
-
-        if bus.apu.bus.ports_written_during_run {
-            // The APU wrote to a port during the bulk skip. This means it
-            // may be in the middle of a handshake expecting the CPU to read.
-            // We can't undo the catch_up, but we stop skipping immediately
-            // so the CPU resumes normal execution and reads the port.
-            // The skip up to this point is already committed.
-        }
 
         // PC is intentionally NOT advanced — we resume at the LDA. The
         // remaining few iterations cost ~30-60 master cycles total and

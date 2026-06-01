@@ -432,6 +432,14 @@ impl Bus {
                 // Mid-DMA APU sync: on real hardware the APU continues
                 // running during DMA. Sync every 128 master cycles (16
                 // bytes) so timers and DSP sample generation stay in step.
+                //
+                // Note: master_clock here includes DMA cycles accumulated
+                // *during* the triggering instruction (STA $420B), before
+                // cpu.cycles has been updated in the frame loop. This creates
+                // a transient temporal inversion where mid-DMA syncs happen
+                // "ahead" of the CPU instruction boundary. This is safe
+                // because the DMA trigger is always the final cycle of STA
+                // $420B, so no CPU state depends on the inverted ordering.
                 dma_cycles_since_sync += 8;
                 if dma_cycles_since_sync >= 128 {
                     self.master_clock += dma_cycles_since_sync as u64;
