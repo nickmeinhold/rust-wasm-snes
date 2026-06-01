@@ -212,20 +212,22 @@ impl Emulator {
             // Tell the PPU which scanline we're on (for V-counter latching).
             self.bus.ppu.scanline = scanline;
 
-            // V/H-count IRQ: fires once when position matches, cleared by $4211 read.
+            // V/H-count IRQ. On real hardware these are dot-position-sensitive:
+            // H-IRQ (mode 1 or 3) fires when the beam reaches the configured
+            // horizontal dot (htime, 0..339), not just "once per scanline."
+            // The check is moved INSIDE the per-instruction loop below so the
+            // assertion edge happens close to the correct dot.
+            //
+            // EDGE TRIGGER (irq_armed latch): real hardware fires the IRQ
+            // ONCE per scanline at the position match. We must not re-fire
+            // every instruction after the handler clears `irq_flag` via a
+            // $4211 read — that would turn a one-shot edge into a
+            // scanline-long level-triggered interrupt storm. `irq_armed`
+            // resets to true at the start of every scanline and disarms the
+            // moment we fire; the next opportunity to fire is next scanline.
             let irq_mode = (self.bus.nmitimen >> 4) & 0x03;
-            if irq_mode != 0 && !self.bus.irq_flag {
-                let fire = match irq_mode {
-                    1 => true, // H-count: fire once per scanline (H position approximated)
-                    2 => scanline == self.bus.vtime, // V-count: fire when scanline matches
-                    3 => scanline == self.bus.vtime, // V+H: fire when V matches (H approximated)
-                    _ => false,
-                };
-                if fire {
-                    self.bus.irq_flag = true;
-                    self.cpu.irq_pending = true;
-                }
-            }
+            let scanline_start = self.cpu.cycles;
+            let mut irq_armed = true;
 
             // Run CPU and APU in lockstep. The APU must keep up with the CPU
             // so that port reads/writes see timely responses — otherwise the
@@ -242,6 +244,28 @@ impl Emulator {
                 if !self.bus.hblank && self.cpu.cycles >= hblank_start {
                     self.bus.hblank = true;
                 }
+
+                // H/V-IRQ at correct dot position within the scanline.
+                // dot = (offset_in_scanline * 340) / 1364, range 0..339.
+                // Gated by `irq_armed` (not `!irq_flag`) so the handler
+                // acknowledging the IRQ via $4211 doesn't immediately
+                // re-trigger us — see edge-trigger note above.
+                if irq_armed && irq_mode != 0 {
+                    let dot = ((self.cpu.cycles - scanline_start) * 340
+                               / MASTER_CYCLES_PER_SCANLINE) as u16;
+                    let fire = match irq_mode {
+                        1 => dot >= self.bus.htime,                               // H-IRQ
+                        2 => scanline == self.bus.vtime,                          // V-IRQ
+                        3 => scanline == self.bus.vtime && dot >= self.bus.htime, // V+H-IRQ
+                        _ => false,
+                    };
+                    if fire {
+                        self.bus.irq_flag = true;
+                        self.cpu.irq_pending = true;
+                        irq_armed = false; // one-shot per scanline
+                    }
+                }
+
                 self.bus.last_write_bank = self.cpu.pbr;
                 self.bus.last_write_pc = self.cpu.pc;
                 let elapsed = self.cpu.step(&mut self.bus);
