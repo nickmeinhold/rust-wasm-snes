@@ -30,7 +30,6 @@ use crate::bus::Bus;
 use crate::dma::{Dma, DmaChannel};
 use crate::joypad::Joypad;
 use crate::ppu::{Ppu, BgLayer};
-use crate::spc700::Apu;
 
 const MAGIC: &[u8; 8] = b"SNES01\0\0";
 const VERSION: u8 = 1;

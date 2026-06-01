@@ -4,7 +4,6 @@
 /// in Rust; the browser provides the display (Canvas), input (keyboard),
 /// and timing (requestAnimationFrame).
 
-pub mod apu;
 pub mod bus;
 pub mod cpu;
 pub mod dma;
